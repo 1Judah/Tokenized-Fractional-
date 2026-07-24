@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --forceExit",
+    "test": "node --experimental-vm-modules node_modules/.bin/jest --forceExit",
     "deploy": "echo 'Push to main — Render auto-deploys via render.yaml'",
     "migrate": "knex migrate:latest",
     "migrate:rollback": "knex migrate:rollback",

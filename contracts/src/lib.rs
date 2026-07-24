@@ -69,10 +69,6 @@ pub enum DataKey {
     BridgeLocked(Address),
     /// SIP-4 metadata
     ContractMetadata,
-    /// Issue #276: Flash loan protection configuration
-    FlashLoanGuardConfig,
-    /// Issue #276: Last trade ledger sequence per account for origin delay checks
-    LastTradeLedger(Address),
 }
 
 #[contracttype]
@@ -118,15 +114,6 @@ pub struct AutoBuybackConfig {
     pub max_amount: u32,
     /// Total token budget remaining for auto-buybacks.
     pub budget: i128,
-}
-
-#[contracttype]
-#[derive(Clone)]
-pub struct FlashLoanGuardConfig {
-    pub enabled: bool,
-    pub max_single_block_volume_pct: u32,
-    pub min_block_interval: u32,
-    pub override_active: bool,
 }
 
 #[contractevent(data_format = "vec")]

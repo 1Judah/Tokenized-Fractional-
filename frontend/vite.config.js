@@ -59,9 +59,4 @@ export default defineConfig({
       ].join('; '),
     },
   },
-  test: {
-    environment: 'jsdom',
-    globals: true,
-    setupFiles: './src/test/setup.js',
-  },
 });

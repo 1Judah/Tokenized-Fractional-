@@ -27,7 +27,6 @@ import { ApolloServer } from '@apollo/server';
 import { expressMiddleware } from '@apollo/server/express4';
 import { typeDefs, createResolvers } from './graphql.js';
 import { initializeGraphQLSubscriptions } from './graphql-ws-adapter.js';
-import { withCdnAssetUrls } from './cdn.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // multer memoryStorage keeps the file in memory as a Buffer (req.file.buffer).
