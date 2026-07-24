@@ -34,6 +34,7 @@ import { createTransactionService } from './services/transactionService.js';
 import { createAnalyticsRoutes } from './routes/analytics.js';
 import { createPurchaseRoutes } from './routes/purchases.js';
 import { createRateLimitingRoutes } from './routes/rateLimiting.js';
+import { partialResponseMiddleware } from './middleware/partialResponse.js';
 
 // ── Sentry init ───────────────────────────────────────────────────────────────
 if (SENTRY_DSN && process.env.NODE_ENV !== 'test') {
@@ -131,6 +132,7 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'x-api-key', 'X-Request-ID'],
 }));
 app.use(express.json({ limit: '10kb' }));
+app.use(partialResponseMiddleware());
 
 // Request-ID middleware
 app.use((req, res, next) => {
