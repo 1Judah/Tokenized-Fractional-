@@ -35,6 +35,11 @@ import { createAnalyticsRoutes } from './routes/analytics.js';
 import { createPurchaseRoutes } from './routes/purchases.js';
 import { createRateLimitingRoutes } from './routes/rateLimiting.js';
 import { partialResponseMiddleware } from './middleware/partialResponse.js';
+import { createWebhookService } from './services/webhookService.js';
+import { createWebhookRoutes } from './routes/webhooks.js';
+import { createFlashLoanProtectionService } from './services/flashLoanProtectionService.js';
+import { createFlashLoanProtectionRoutes } from './routes/flashLoanProtection.js';
+import { createGraphQLPlaygroundSecurityMiddleware } from '../graphql.js';
 
 // ── Sentry init ───────────────────────────────────────────────────────────────
 if (SENTRY_DSN && process.env.NODE_ENV !== 'test') {
@@ -72,6 +77,10 @@ let transactionService = null;
 let analyticsRoutes = null;
 let purchasesRoutes = null;
 let rateLimitingRoutes = null;
+let webhookService = null;
+let webhookRoutes = null;
+let flashLoanProtectionService = null;
+let flashLoanProtectionRoutes = null;
 
 /**
  * Initialize the app with database services.
@@ -112,7 +121,15 @@ export async function initializeApp() {
     // Setup rate limiting routes
     rateLimitingRoutes = createRateLimitingRoutes(logger, adminAuth);
 
-    return { db, apiKeyService, transactionService };
+    // Setup Webhook service and routes
+    webhookService = createWebhookService(logger);
+    webhookRoutes = createWebhookRoutes(webhookService, logger, adminAuth);
+
+    // Setup Flash Loan Protection service and routes
+    flashLoanProtectionService = createFlashLoanProtectionService(logger);
+    flashLoanProtectionRoutes = createFlashLoanProtectionRoutes(flashLoanProtectionService, adminAuth);
+
+    return { db, apiKeyService, transactionService, webhookService, flashLoanProtectionService };
   } catch (error) {
     logger.error({ error: error.message }, 'Failed to initialize app');
     throw error;
@@ -299,6 +316,39 @@ app.use('/api/rate-limiting', (req, res, next) => {
   }
   rateLimitingRoutes(req, res, next);
 });
+
+// Mount Webhook management routes
+app.use('/api/v1/webhooks', (req, res, next) => {
+  if (!webhookRoutes) {
+    return res.status(503).json({ error: 'Webhook service not initialized', code: 'SERVICE_UNAVAILABLE' });
+  }
+  webhookRoutes(req, res, next);
+});
+
+app.use('/api/webhooks', (req, res, next) => {
+  if (!webhookRoutes) {
+    return res.status(503).json({ error: 'Webhook service not initialized', code: 'SERVICE_UNAVAILABLE' });
+  }
+  webhookRoutes(req, res, next);
+});
+
+// Mount Flash Loan Protection routes
+app.use('/api/v1/flash-loan-protection', (req, res, next) => {
+  if (!flashLoanProtectionRoutes) {
+    return res.status(503).json({ error: 'Flash loan protection service not initialized', code: 'SERVICE_UNAVAILABLE' });
+  }
+  flashLoanProtectionRoutes(req, res, next);
+});
+
+app.use('/api/flash-loan-protection', (req, res, next) => {
+  if (!flashLoanProtectionRoutes) {
+    return res.status(503).json({ error: 'Flash loan protection service not initialized', code: 'SERVICE_UNAVAILABLE' });
+  }
+  flashLoanProtectionRoutes(req, res, next);
+});
+
+// Mount GraphQL Security Middleware
+app.use('/graphql', createGraphQLPlaygroundSecurityMiddleware());
 
 // 404 handler
 app.use((_req, res) => {

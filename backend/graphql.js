@@ -727,3 +727,78 @@ export function createResolvers(dataLayer) {
     },
   };
 }
+
+/**
+ * Calculate query complexity (depth and field count) for GraphQL security hardening
+ */
+export function calculateQueryComplexity(queryStr) {
+  if (!queryStr || typeof queryStr !== 'string') return { depth: 0, fieldCount: 0 };
+  
+  const depthMatches = queryStr.match(/\{/g) || [];
+  const depth = depthMatches.length;
+  
+  // Field selection count
+  const cleanStr = queryStr.replace(/#.*$/gm, '').replace(/"[^"]*"/g, '');
+  const fields = cleanStr.match(/[a-zA-Z0-9_]+\s*(?=\{|\(|\s|$)/g) || [];
+  
+  return {
+    depth,
+    fieldCount: fields.length,
+  };
+}
+
+/**
+ * GraphQL Playground Security Hardening Middleware
+ */
+export function createGraphQLPlaygroundSecurityMiddleware(options = {}) {
+  const {
+    maxDepth = 6,
+    maxFields = 100,
+    allowedIps = [],
+    logger = console,
+  } = options;
+
+  return (req, res, next) => {
+    // 1. Conditional Disabling in Production
+    const isProd = process.env.NODE_ENV === 'production';
+    const isPlaygroundEnabled = process.env.ENABLE_GRAPHQL_PLAYGROUND === 'true';
+    if (isProd && !isPlaygroundEnabled) {
+      logger.warn({ ip: req.ip }, 'Blocked GraphQL Playground access in production');
+      return res.status(403).json({ error: 'GraphQL Playground is disabled in production' });
+    }
+
+    // 2. IP Whitelisting (if configured)
+    if (allowedIps.length > 0) {
+      const clientIp = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+      if (!allowedIps.includes(clientIp)) {
+        logger.warn({ clientIp }, 'Blocked unauthorized IP access to GraphQL Playground');
+        return res.status(403).json({ error: 'IP address not authorized for GraphQL Playground' });
+      }
+    }
+
+    // 3. Main API Authentication Integration
+    const apiKey = req.headers['x-api-key'];
+    const authHeader = req.headers['authorization'];
+    if (!apiKey && !authHeader && req.path.includes('/graphql')) {
+      // In strict mode require auth token or api key
+      if (options.requireAuth) {
+        return res.status(401).json({ error: 'Authentication required for GraphQL Playground access' });
+      }
+    }
+
+    // 4. Query Complexity Limits (for POST requests)
+    if (req.method === 'POST' && req.body && req.body.query) {
+      const { depth, fieldCount } = calculateQueryComplexity(req.body.query);
+      if (depth > maxDepth || fieldCount > maxFields) {
+        logger.warn({ depth, fieldCount, maxDepth, maxFields }, 'GraphQL query rejected: Complexity limit exceeded');
+        return res.status(400).json({
+          error: 'Query complexity limit exceeded',
+          details: { depth, fieldCount, maxDepth, maxFields },
+        });
+      }
+    }
+
+    next();
+  };
+}
+
