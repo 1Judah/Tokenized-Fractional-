@@ -4,6 +4,9 @@
   "description": "Off-chain metadata API for RWA marketplace",
   "main": "src/server.js",
   "type": "module",
+  "engines": {
+    "node": ">=20.18.0"
+  },
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
