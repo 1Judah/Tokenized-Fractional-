@@ -13,7 +13,9 @@ import styles from './AssetGrid.module.css';
  * @param {string}   error        - Error message if fetch failed
  * @param {boolean}  isEmpty      - True when fetch succeeded but returned 0 assets
  */
-export default function AssetGrid({ assets = [], loading = false, error = null, isEmpty = false }) {
+export default function AssetGrid({ assets = [], loading = false, error = null, isEmpty = false, enablePagination = true, enableVirtualScroll = true }) {
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   // ── Loading state ──────────────────────────────────────────────────────
   if (loading) {
     return (

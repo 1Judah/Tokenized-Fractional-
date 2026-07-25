@@ -374,7 +374,13 @@ function App() {
               <img src="https://github.com/Trust-Analysis.png" alt="Repo avatar" className={styles.repoAvatar} />
             </a>
             <h1 className={styles.title}>RWA Marketplace</h1>
-            <Badge variant={isTestnet ? 'success' : 'danger'}>{isTestnet ? 'TESTNET' : 'MAINNET'}</Badge>
+            <Tooltip
+              content={isTestnet ? 'Connected to Stellar Testnet — safe for testing' : 'Connected to Stellar Mainnet — real funds at risk'}
+              position="bottom"
+              trigger="hover"
+            >
+              <Badge variant={isTestnet ? 'success' : 'danger'}>{isTestnet ? 'TESTNET' : 'MAINNET'}</Badge>
+            </Tooltip>
           </div>
         </div>
         <div className={styles.walletArea}>
