@@ -303,6 +303,50 @@ pub struct EventClaimVestedShares {
     amount: u32,
 }
 
+// ── Issue #262: Batch purchase types and events ──────────────────────
+
+/// A single purchase request within a batch.
+#[contracttype]
+#[derive(Clone)]
+pub struct BatchPurchaseRequest {
+    /// Number of shares to purchase in this item.
+    pub shares: u32,
+    /// Payment token address to use for this item.
+    pub payment_token: Address,
+}
+
+/// Result for a single item in a batch purchase.
+#[contracttype]
+#[derive(Clone)]
+pub struct BatchPurchaseResult {
+    /// Index of the request in the batch (0-based).
+    pub index: u32,
+    /// Whether this item succeeded.
+    pub success: bool,
+    /// Shares actually purchased (0 if failed).
+    pub shares_purchased: u32,
+    /// Total cost paid (0 if failed).
+    pub total_cost: i128,
+}
+
+/// Emitted once per successful batch_buy_shares call.
+#[contractevent(data_format = "vec")]
+pub struct EventBatchBuyShares {
+    buyer: Address,
+    total_items: u32,
+    successful_items: u32,
+    total_shares: u32,
+    total_cost: i128,
+}
+
+/// Emitted for each individual item that fails within a batch.
+#[contractevent(data_format = "vec")]
+pub struct EventBatchPurchaseItemFailed {
+    buyer: Address,
+    index: u32,
+    shares_requested: u32,
+}
+
 // ── Issue #167: Timelock events ─────────────────────────────────────
 
 #[contractevent(data_format = "vec")]
@@ -1573,6 +1617,398 @@ impl RwaMarketplace {
 
         // Delegate to the core buyback, which requires seller auth
         Self::buyback_shares(env, seller, amount);
+    }
+
+    // ── Issue #262: Batch Share Purchase ─────────────────────────────────
+
+    /// Maximum number of purchase requests allowed in a single batch.
+    /// Prevents excessive gas consumption and keeps transactions bounded.
+    const MAX_BATCH_SIZE: u32 = 10;
+
+    /// Purchase multiple share allocations in a single transaction.
+    ///
+    /// This function reduces gas costs by sharing common validation logic
+    /// (pause check, whitelist, oracle price fetch) across all items in the
+    /// batch. Each item is validated individually and failures are recorded
+    /// without aborting the entire batch (partial fulfillment).
+    ///
+    /// # Arguments
+    /// * `buyer` – The address purchasing shares (must authorize).
+    /// * `requests` – A vector of `BatchPurchaseRequest` items.
+    ///
+    /// # Returns
+    /// A vector of `BatchPurchaseResult` with per-item outcomes.
+    ///
+    /// # Panics
+    /// * If the marketplace is paused.
+    /// * If the buyer is not whitelisted.
+    /// * If the batch is empty or exceeds `MAX_BATCH_SIZE`.
+    pub fn batch_buy_shares(
+        env: Env,
+        buyer: Address,
+        requests: Vec<BatchPurchaseRequest>,
+    ) -> Vec<BatchPurchaseResult> {
+        buyer.require_auth();
+
+        // ── Re-entrancy guard ────────────────────────────────────────
+        _check_non_reentrant(&env);
+
+        // ── Shared validations (done once for all items) ─────────────
+        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+            _set_non_reentrant(&env, false);
+            panic!("Marketplace is paused");
+        }
+
+        if !Self::is_whitelisted(env.clone(), buyer.clone()) {
+            _set_non_reentrant(&env, false);
+            panic!("Buyer is not whitelisted");
+        }
+
+        let batch_len = requests.len();
+        if batch_len == 0 {
+            _set_non_reentrant(&env, false);
+            panic!("Batch must contain at least one purchase request");
+        }
+        if batch_len > Self::MAX_BATCH_SIZE {
+            _set_non_reentrant(&env, false);
+            panic!("Batch size exceeds maximum allowed");
+        }
+
+        // ── Shared state reads (amortised across batch) ──────────────
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Contract not initialized: admin");
+
+        let admin_price: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::PricePerShare)
+            .expect("Contract not initialized: price");
+
+        // Fetch oracle price once if configured (gas optimisation).
+        let price: i128 = if let Some(oracle_addr) = env
+            .storage()
+            .instance()
+            .get::<DataKey, Address>(&DataKey::OracleAddress)
+        {
+            let oracle_client = OracleContractClient::new(&env, &oracle_addr);
+            match oracle_client.try_get_price() {
+                Ok(Ok(p)) if p > 0 => {
+                    EventOraclePriceFetched {
+                        oracle: oracle_addr,
+                        price: p,
+                    }
+                    .publish(&env);
+                    p
+                }
+                _ => {
+                    EventOraclePriceFallback { admin_price }.publish(&env);
+                    admin_price
+                }
+            }
+        } else {
+            admin_price
+        };
+
+        let max_per_user: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxSharesPerUser)
+            .unwrap_or(0);
+
+        let mut available: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::AvailableShares)
+            .expect("Contract not initialized: available shares");
+
+        let mut buyer_balance: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Balance(buyer.clone()))
+            .unwrap_or(0);
+
+        // ── Process each item ────────────────────────────────────────
+        let mut results: Vec<BatchPurchaseResult> = Vec::new(&env);
+        let mut aggregate_shares: u32 = 0;
+        let mut aggregate_cost: i128 = 0;
+        let mut successful_count: u32 = 0;
+
+        for i in 0..batch_len {
+            let req = requests.get(i).unwrap();
+            let idx = i;
+
+            // Per-item validation
+            if req.shares == 0 {
+                EventBatchPurchaseItemFailed {
+                    buyer: buyer.clone(),
+                    index: idx,
+                    shares_requested: 0,
+                }
+                .publish(&env);
+                results.push_back(BatchPurchaseResult {
+                    index: idx,
+                    success: false,
+                    shares_purchased: 0,
+                    total_cost: 0,
+                });
+                continue;
+            }
+
+            if req.shares > available {
+                EventBatchPurchaseItemFailed {
+                    buyer: buyer.clone(),
+                    index: idx,
+                    shares_requested: req.shares,
+                }
+                .publish(&env);
+                results.push_back(BatchPurchaseResult {
+                    index: idx,
+                    success: false,
+                    shares_purchased: 0,
+                    total_cost: 0,
+                });
+                continue;
+            }
+
+            // Check per-user cap
+            let prospective = checked_add_u32(buyer_balance, req.shares);
+            if max_per_user > 0 && prospective > max_per_user {
+                EventBatchPurchaseItemFailed {
+                    buyer: buyer.clone(),
+                    index: idx,
+                    shares_requested: req.shares,
+                }
+                .publish(&env);
+                results.push_back(BatchPurchaseResult {
+                    index: idx,
+                    success: false,
+                    shares_purchased: 0,
+                    total_cost: 0,
+                });
+                continue;
+            }
+
+            // Validate payment token is accepted
+            let accepted: Vec<Address> = env
+                .storage()
+                .instance()
+                .get(&DataKey::AcceptedTokens)
+                .unwrap_or_else(|| Vec::new(&env));
+            let mut token_ok = false;
+            for t in accepted.iter() {
+                if t == req.payment_token {
+                    token_ok = true;
+                    break;
+                }
+            }
+            if !token_ok {
+                EventBatchPurchaseItemFailed {
+                    buyer: buyer.clone(),
+                    index: idx,
+                    shares_requested: req.shares,
+                }
+                .publish(&env);
+                results.push_back(BatchPurchaseResult {
+                    index: idx,
+                    success: false,
+                    shares_purchased: 0,
+                    total_cost: 0,
+                });
+                continue;
+            }
+
+            // ── Execute the purchase ─────────────────────────────────
+            let item_cost = checked_mul_i128(price, req.shares as i128);
+
+            let client = token::TokenClient::new(&env, &req.payment_token);
+            client.transfer(&buyer, &admin, &item_cost);
+
+            // Update running state
+            available = checked_sub_u32(available, req.shares);
+            buyer_balance = prospective;
+            aggregate_shares = checked_add_u32(aggregate_shares, req.shares);
+            aggregate_cost = checked_add_i128(aggregate_cost, item_cost);
+            successful_count += 1;
+
+            // Mint NFT certificates if configured
+            if let Some(nft_addr) = env
+                .storage()
+                .instance()
+                .get::<DataKey, Address>(&DataKey::NftContract)
+            {
+                let nft = NftContractClient::new(&env, &nft_addr);
+                for _ in 0..req.shares {
+                    nft.mint_certificate(&buyer);
+                }
+            }
+
+            results.push_back(BatchPurchaseResult {
+                index: idx,
+                success: true,
+                shares_purchased: req.shares,
+                total_cost: item_cost,
+            });
+        }
+
+        // ── Persist aggregated state changes ─────────────────────────
+        env.storage()
+            .instance()
+            .set(&DataKey::AvailableShares, &available);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Balance(buyer.clone()), &buyer_balance);
+
+        if aggregate_shares > 0 {
+            Self::register_holder(&env, buyer.clone());
+        }
+
+        // ── Clear reentrancy guard and emit summary event ────────────
+        _set_non_reentrant(&env, false);
+
+        EventBatchBuyShares {
+            buyer,
+            total_items: batch_len,
+            successful_items: successful_count,
+            total_shares: aggregate_shares,
+            total_cost: aggregate_cost,
+        }
+        .publish(&env);
+
+        results
+    }
+
+    /// Get a price quote for a batch of purchase requests without executing
+    /// any transfers. Useful for UI display and gas estimation.
+    ///
+    /// Returns a vector of `BatchPurchaseResult` where `success` indicates
+    /// whether the item *would* succeed, and `total_cost` is the estimated
+    /// payment amount.
+    pub fn get_batch_quote(
+        env: Env,
+        buyer: Address,
+        requests: Vec<BatchPurchaseRequest>,
+    ) -> Vec<BatchPurchaseResult> {
+        let batch_len = requests.len();
+        if batch_len == 0 {
+            panic!("Batch must contain at least one purchase request");
+        }
+        if batch_len > Self::MAX_BATCH_SIZE {
+            panic!("Batch size exceeds maximum allowed");
+        }
+
+        let admin_price: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::PricePerShare)
+            .expect("Contract not initialized: price");
+
+        // Use oracle price if configured (read-only, no events)
+        let price: i128 = if let Some(oracle_addr) = env
+            .storage()
+            .instance()
+            .get::<DataKey, Address>(&DataKey::OracleAddress)
+        {
+            let oracle_client = OracleContractClient::new(&env, &oracle_addr);
+            match oracle_client.try_get_price() {
+                Ok(Ok(p)) if p > 0 => p,
+                _ => admin_price,
+            }
+        } else {
+            admin_price
+        };
+
+        let is_whitelisted = Self::is_whitelisted(env.clone(), buyer.clone());
+        let is_paused = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+
+        let max_per_user: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxSharesPerUser)
+            .unwrap_or(0);
+
+        let mut available: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::AvailableShares)
+            .expect("Contract not initialized: available shares");
+
+        let mut buyer_balance: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Balance(buyer.clone()))
+            .unwrap_or(0);
+
+        let mut results: Vec<BatchPurchaseResult> = Vec::new(&env);
+
+        for i in 0..batch_len {
+            let req = requests.get(i).unwrap();
+            let idx = i;
+
+            // Simulate the same validation as batch_buy_shares
+            if is_paused || !is_whitelisted || req.shares == 0 || req.shares > available {
+                results.push_back(BatchPurchaseResult {
+                    index: idx,
+                    success: false,
+                    shares_purchased: 0,
+                    total_cost: 0,
+                });
+                continue;
+            }
+
+            let prospective = checked_add_u32(buyer_balance, req.shares);
+            if max_per_user > 0 && prospective > max_per_user {
+                results.push_back(BatchPurchaseResult {
+                    index: idx,
+                    success: false,
+                    shares_purchased: 0,
+                    total_cost: 0,
+                });
+                continue;
+            }
+
+            // Validate payment token
+            let accepted: Vec<Address> = env
+                .storage()
+                .instance()
+                .get(&DataKey::AcceptedTokens)
+                .unwrap_or_else(|| Vec::new(&env));
+            let mut token_ok = false;
+            for t in accepted.iter() {
+                if t == req.payment_token {
+                    token_ok = true;
+                    break;
+                }
+            }
+            if !token_ok {
+                results.push_back(BatchPurchaseResult {
+                    index: idx,
+                    success: false,
+                    shares_purchased: 0,
+                    total_cost: 0,
+                });
+                continue;
+            }
+
+            let item_cost = checked_mul_i128(price, req.shares as i128);
+            available = checked_sub_u32(available, req.shares);
+            buyer_balance = prospective;
+
+            results.push_back(BatchPurchaseResult {
+                index: idx,
+                success: true,
+                shares_purchased: req.shares,
+                total_cost: item_cost,
+            });
+        }
+
+        results
     }
 }
 
@@ -4075,6 +4511,297 @@ mod sip4_metadata_tests {
         let te = setup();
         let c = client(&te);
         c.get_contract_metadata();
+    }
+
+    // ── Issue #262: Batch purchase tests ─────────────────────────────────
+
+    #[test]
+    fn test_batch_buy_shares_basic() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 1_000_000);
+        c.add_to_whitelist(&te.buyer);
+
+        let mut requests: Vec<BatchPurchaseRequest> = Vec::new(&te.env);
+        requests.push_back(BatchPurchaseRequest {
+            shares: 10,
+            payment_token: te.token_id.clone(),
+        });
+        requests.push_back(BatchPurchaseRequest {
+            shares: 20,
+            payment_token: te.token_id.clone(),
+        });
+        requests.push_back(BatchPurchaseRequest {
+            shares: 5,
+            payment_token: te.token_id.clone(),
+        });
+
+        let results = c.batch_buy_shares(&te.buyer, &requests);
+        assert_eq!(results.len(), 3);
+
+        // All should succeed
+        assert!(results.get(0).unwrap().success);
+        assert_eq!(results.get(0).unwrap().shares_purchased, 10);
+        assert_eq!(results.get(0).unwrap().total_cost, 1000); // 10 * 100
+
+        assert!(results.get(1).unwrap().success);
+        assert_eq!(results.get(1).unwrap().shares_purchased, 20);
+        assert_eq!(results.get(1).unwrap().total_cost, 2000); // 20 * 100
+
+        assert!(results.get(2).unwrap().success);
+        assert_eq!(results.get(2).unwrap().shares_purchased, 5);
+        assert_eq!(results.get(2).unwrap().total_cost, 500); // 5 * 100
+
+        // Verify aggregate state
+        assert_eq!(c.get_shares(&te.buyer), 35); // 10 + 20 + 5
+        assert_eq!(c.get_available_shares(), 965); // 1000 - 35
+    }
+
+    #[test]
+    fn test_batch_buy_shares_partial_fulfillment() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 1_000_000);
+        c.add_to_whitelist(&te.buyer);
+
+        // Second request asks for 0 shares (invalid), should fail
+        let mut requests: Vec<BatchPurchaseRequest> = Vec::new(&te.env);
+        requests.push_back(BatchPurchaseRequest {
+            shares: 10,
+            payment_token: te.token_id.clone(),
+        });
+        requests.push_back(BatchPurchaseRequest {
+            shares: 0, // Invalid
+            payment_token: te.token_id.clone(),
+        });
+        requests.push_back(BatchPurchaseRequest {
+            shares: 15,
+            payment_token: te.token_id.clone(),
+        });
+
+        let results = c.batch_buy_shares(&te.buyer, &requests);
+        assert_eq!(results.len(), 3);
+
+        assert!(results.get(0).unwrap().success);
+        assert!(!results.get(1).unwrap().success); // Failed: 0 shares
+        assert!(results.get(2).unwrap().success);
+
+        // Only 10 + 15 = 25 shares purchased
+        assert_eq!(c.get_shares(&te.buyer), 25);
+        assert_eq!(c.get_available_shares(), 975);
+    }
+
+    #[test]
+    fn test_batch_buy_shares_exceeds_available() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &50); // Only 50 shares
+        mint(&te, &te.buyer, 1_000_000);
+        c.add_to_whitelist(&te.buyer);
+
+        let mut requests: Vec<BatchPurchaseRequest> = Vec::new(&te.env);
+        requests.push_back(BatchPurchaseRequest {
+            shares: 30,
+            payment_token: te.token_id.clone(),
+        });
+        requests.push_back(BatchPurchaseRequest {
+            shares: 30, // Would exceed remaining 20
+            payment_token: te.token_id.clone(),
+        });
+
+        let results = c.batch_buy_shares(&te.buyer, &requests);
+        assert_eq!(results.len(), 2);
+
+        assert!(results.get(0).unwrap().success);
+        assert!(!results.get(1).unwrap().success); // Failed: not enough available
+
+        assert_eq!(c.get_shares(&te.buyer), 30);
+        assert_eq!(c.get_available_shares(), 20); // 50 - 30
+    }
+
+    #[test]
+    #[should_panic(expected = "Batch must contain at least one purchase request")]
+    fn test_batch_buy_shares_empty_batch() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        c.add_to_whitelist(&te.buyer);
+
+        let requests: Vec<BatchPurchaseRequest> = Vec::new(&te.env);
+        c.batch_buy_shares(&te.buyer, &requests);
+    }
+
+    #[test]
+    #[should_panic(expected = "Batch size exceeds maximum allowed")]
+    fn test_batch_buy_shares_exceeds_max_batch_size() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 1_000_000);
+        c.add_to_whitelist(&te.buyer);
+
+        // Create 11 requests (exceeds MAX_BATCH_SIZE = 10)
+        let mut requests: Vec<BatchPurchaseRequest> = Vec::new(&te.env);
+        for _ in 0..11u32 {
+            requests.push_back(BatchPurchaseRequest {
+                shares: 1,
+                payment_token: te.token_id.clone(),
+            });
+        }
+        c.batch_buy_shares(&te.buyer, &requests);
+    }
+
+    #[test]
+    #[should_panic(expected = "Buyer is not whitelisted")]
+    fn test_batch_buy_shares_requires_whitelist() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 1_000_000);
+        // Not whitelisted
+
+        let mut requests: Vec<BatchPurchaseRequest> = Vec::new(&te.env);
+        requests.push_back(BatchPurchaseRequest {
+            shares: 10,
+            payment_token: te.token_id.clone(),
+        });
+        c.batch_buy_shares(&te.buyer, &requests);
+    }
+
+    #[test]
+    #[should_panic(expected = "Marketplace is paused")]
+    fn test_batch_buy_shares_when_paused() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 1_000_000);
+        c.add_to_whitelist(&te.buyer);
+        c.pause();
+
+        let mut requests: Vec<BatchPurchaseRequest> = Vec::new(&te.env);
+        requests.push_back(BatchPurchaseRequest {
+            shares: 10,
+            payment_token: te.token_id.clone(),
+        });
+        c.batch_buy_shares(&te.buyer, &requests);
+    }
+
+    #[test]
+    fn test_batch_buy_shares_all_fail() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 1_000_000);
+        c.add_to_whitelist(&te.buyer);
+
+        // All requests have 0 shares
+        let mut requests: Vec<BatchPurchaseRequest> = Vec::new(&te.env);
+        requests.push_back(BatchPurchaseRequest {
+            shares: 0,
+            payment_token: te.token_id.clone(),
+        });
+        requests.push_back(BatchPurchaseRequest {
+            shares: 0,
+            payment_token: te.token_id.clone(),
+        });
+
+        let results = c.batch_buy_shares(&te.buyer, &requests);
+        assert_eq!(results.len(), 2);
+        assert!(!results.get(0).unwrap().success);
+        assert!(!results.get(1).unwrap().success);
+
+        // No state changes
+        assert_eq!(c.get_shares(&te.buyer), 0);
+        assert_eq!(c.get_available_shares(), 1000);
+    }
+
+    #[test]
+    fn test_get_batch_quote_accuracy() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 1_000_000);
+        c.add_to_whitelist(&te.buyer);
+
+        let mut requests: Vec<BatchPurchaseRequest> = Vec::new(&te.env);
+        requests.push_back(BatchPurchaseRequest {
+            shares: 10,
+            payment_token: te.token_id.clone(),
+        });
+        requests.push_back(BatchPurchaseRequest {
+            shares: 0, // Should fail in quote too
+            payment_token: te.token_id.clone(),
+        });
+        requests.push_back(BatchPurchaseRequest {
+            shares: 25,
+            payment_token: te.token_id.clone(),
+        });
+
+        let quotes = c.get_batch_quote(&te.buyer, &requests);
+        assert_eq!(quotes.len(), 3);
+
+        assert!(quotes.get(0).unwrap().success);
+        assert_eq!(quotes.get(0).unwrap().total_cost, 1000);
+
+        assert!(!quotes.get(1).unwrap().success);
+
+        assert!(quotes.get(2).unwrap().success);
+        assert_eq!(quotes.get(2).unwrap().total_cost, 2500);
+
+        // Quote should NOT change state
+        assert_eq!(c.get_available_shares(), 1000);
+        assert_eq!(c.get_shares(&te.buyer), 0);
+    }
+
+    #[test]
+    fn test_batch_buy_shares_single_item() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 1_000_000);
+        c.add_to_whitelist(&te.buyer);
+
+        let mut requests: Vec<BatchPurchaseRequest> = Vec::new(&te.env);
+        requests.push_back(BatchPurchaseRequest {
+            shares: 50,
+            payment_token: te.token_id.clone(),
+        });
+
+        let results = c.batch_buy_shares(&te.buyer, &requests);
+        assert_eq!(results.len(), 1);
+        assert!(results.get(0).unwrap().success);
+        assert_eq!(results.get(0).unwrap().shares_purchased, 50);
+        assert_eq!(results.get(0).unwrap().total_cost, 5000);
+        assert_eq!(c.get_shares(&te.buyer), 50);
+        assert_eq!(c.get_available_shares(), 950);
+    }
+
+    #[test]
+    fn test_batch_buy_shares_max_batch_size() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 1_000_000);
+        c.add_to_whitelist(&te.buyer);
+
+        // Exactly 10 requests (the limit)
+        let mut requests: Vec<BatchPurchaseRequest> = Vec::new(&te.env);
+        for _ in 0..10u32 {
+            requests.push_back(BatchPurchaseRequest {
+                shares: 1,
+                payment_token: te.token_id.clone(),
+            });
+        }
+
+        let results = c.batch_buy_shares(&te.buyer, &requests);
+        assert_eq!(results.len(), 10);
+        for i in 0..10u32 {
+            assert!(results.get(i).unwrap().success);
+        }
+        assert_eq!(c.get_shares(&te.buyer), 10);
+        assert_eq!(c.get_available_shares(), 990);
     }
 
 }
