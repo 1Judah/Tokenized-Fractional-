@@ -26,6 +26,7 @@ import AssetComparison from './components/AssetComparison/AssetComparison';
 import FavoritesPage from './components/FavoritesPage/FavoritesPage';
 import UserProfile from './components/UserProfile/UserProfile';
 import styles from './App.module.css';
+import Breadcrumbs from './components/Breadcrumbs/Breadcrumbs';
 
 import { useWalletStore } from './store/useWalletStore';
 import {
@@ -447,6 +448,19 @@ function App() {
           ★ Favorites
         </button>
       </nav>
+
+      {/* Breadcrumb navigation (Issue #301) */}
+      <Breadcrumbs
+        labels={{
+          marketplace: 'Marketplace',
+          portfolio: 'Portfolio',
+          admin: 'Admin',
+          history: 'History',
+          compare: 'Compare',
+          favorites: 'Favorites',
+          profile: 'Profile',
+        }}
+      />
 
       <ToastContainer />
 
