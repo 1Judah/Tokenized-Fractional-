@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { Networks, nativeToScVal } from '@stellar/stellar-sdk';
 import { useTranslation } from 'react-i18next';
@@ -11,21 +11,37 @@ import Badge from './components/Badge/Badge';
 import Button from './components/Button/Button';
 import Skeleton from './components/Skeleton/Skeleton';
 import AssetGrid from './components/AssetGrid/AssetGrid';
-import AdminPage from './components/AdminPage/AdminPage';
-import PortfolioPage from './components/PortfolioPage/PortfolioPage';
 import BuyShares from './components/BuyShares/BuyShares';
 import ToastContainer from './components/Toast/Toast';
 import ConfirmPurchase from './components/ConfirmPurchase/ConfirmPurchase';
 import LanguageSwitcher from './components/LanguageSwitcher/LanguageSwitcher';
-import TransactionHistory from './components/TransactionHistory/TransactionHistory';
 import ShortcutHelpModal from './components/ShortcutHelp/ShortcutHelp';
 import VirtualTour from './components/VirtualTour/VirtualTour';
-import NewsSection from './components/NewsSection/NewsSection';
-import PriceAlert from './components/PriceAlert/PriceAlert';
-import AssetComparison from './components/AssetComparison/AssetComparison';
-import FavoritesPage from './components/FavoritesPage/FavoritesPage';
-import UserProfile from './components/UserProfile/UserProfile';
+import EmptyState from './components/EmptyState/EmptyState';
+import OptimizedImage from './components/OptimizedImage/OptimizedImage';
 import styles from './App.module.css';
+
+// ── Route-based code splitting (Issue #304) ──────────────────────────────────
+// Heavy view components are lazy-loaded to reduce initial bundle size.
+// Each route gets its own chunk loaded on-demand with Suspense fallback.
+const AdminPage             = lazy(() => import('./components/AdminPage/AdminPage'));
+const PortfolioPage         = lazy(() => import('./components/PortfolioPage/PortfolioPage'));
+const TransactionHistory    = lazy(() => import('./components/TransactionHistory/TransactionHistory'));
+const NewsSection           = lazy(() => import('./components/NewsSection/NewsSection'));
+const PriceAlert            = lazy(() => import('./components/PriceAlert/PriceAlert'));
+const AssetComparison       = lazy(() => import('./components/AssetComparison/AssetComparison'));
+const FavoritesPage         = lazy(() => import('./components/FavoritesPage/FavoritesPage'));
+const UserProfile           = lazy(() => import('./components/UserProfile/UserProfile'));
+const InvestmentCalculator  = lazy(() => import('./components/InvestmentCalculator/InvestmentCalculator'));
+
+// ── Suspense fallback for lazy-loaded chunks (Issue #304) ────────────────────
+function LazyFallback() {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '200px', width: '100%' }}>
+      <Skeleton variant="rect" height="200px" width="100%" style={{ borderRadius: 'var(--radius-sm)' }} />
+    </div>
+  );
+}
 
 import { useWalletStore } from './store/useWalletStore';
 import {
@@ -54,7 +70,7 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 const PATH_TO_VIEW = { '/': 'marketplace', '/portfolio': 'portfolio', '/admin': 'admin', '/history': 'history', '/profile': 'profile' };
 const VIEW_TO_PATH = { marketplace: '/', portfolio: '/portfolio', admin: '/admin', history: '/history', profile: '/profile' };
 
-function MarketplacePage({ publicKey, walletError, assetMeta, assets, isFetchingAssets, assetsError, loadingMeta, shares, loadingShares, buyAmount, setBuyAmount, loadingBuy, handleBuyShares, pricePerShare }) {
+const MarketplacePage = React.memo(function MarketplacePage({ publicKey, walletError, assetMeta, assets, isFetchingAssets, assetsError, loadingMeta, shares, loadingShares, buyAmount, setBuyAmount, loadingBuy, handleBuyShares, pricePerShare }) {
   const isTestnet = NETWORK_PASSPHRASE === Networks.TESTNET;
   return (
     <>
@@ -75,7 +91,14 @@ function MarketplacePage({ publicKey, walletError, assetMeta, assets, isFetching
         <Card hoverable>
           {assetMeta.imageUrl && (
             <div className={styles.assetImageWrapper}>
-              <img src={assetMeta.imageUrl} alt={assetMeta.title} className={styles.assetImage} />
+              <OptimizedImage
+                src={assetMeta.imageUrl}
+                alt={assetMeta.title}
+                eager
+                ratio="16/9"
+                className={styles.assetImage}
+                sizes="(max-width: 768px) 100vw, 600px"
+              />
             </div>
           )}
           <h2 className={styles.assetTitle}>{assetMeta.title}</h2>
@@ -129,7 +152,7 @@ function MarketplacePage({ publicKey, walletError, assetMeta, assets, isFetching
       )}
     </>
   );
-}
+});
 
 function App() {
   // ── Global store state ─────────────────────────────────────────────────────
@@ -329,14 +352,14 @@ function App() {
 
   useEffect(() => { fetchAllAssets(API_URL); }, []);
 
-  const connectWallet = async () => { clearWalletError(); await connect(); };
-  const disconnectWallet = () => { disconnect(); clearMeta(); clearAssets(); setTxResult(null); setTxError(null); };
+  const connectWallet = useCallback(async () => { clearWalletError(); await connect(); }, [clearWalletError, connect]);
+  const disconnectWallet = useCallback(() => { disconnect(); clearMeta(); clearAssets(); setTxResult(null); setTxError(null); }, [disconnect, clearMeta, clearAssets]);
 
-  const handleBuyShares = () => {
+  const handleBuyShares = useCallback(() => {
     if (!publicKey) return;
     if (buyAmount < 1) { addToast({ message: MUST_BUY_AT_LEAST_ONE_SHARE, type: 'error' }); return; }
     setConfirmPending(true);
-  };
+  }, [publicKey, buyAmount, addToast]);
 
   const handleConfirmBuy = async () => {
     setTxResult(null);
@@ -363,7 +386,7 @@ function App() {
     }
   };
 
-  const isTestnet = NETWORK_PASSPHRASE === Networks.TESTNET;
+  const isTestnet = useMemo(() => NETWORK_PASSPHRASE === Networks.TESTNET, []);
 
   return (
     <div className={styles.container}>
@@ -450,6 +473,7 @@ function App() {
 
       <ToastContainer />
 
+      <Suspense fallback={<LazyFallback />}>
       {view === 'portfolio' ? (
         <PortfolioPage />
       ) : view === 'admin' ? (
@@ -496,7 +520,14 @@ function App() {
         <Card hoverable>
           {assetMeta.imageUrl && (
             <div className={styles.assetImageWrapper}>
-              <img src={assetMeta.imageUrl} alt={assetMeta.title} className={styles.assetImage} />
+              <OptimizedImage
+                src={assetMeta.imageUrl}
+                alt={assetMeta.title}
+                eager
+                ratio="16/9"
+                className={styles.assetImage}
+                sizes="(max-width: 768px) 100vw, 600px"
+              />
             </div>
           )}
           {assetMeta.assetType === 'real_estate' && assetMeta.imageUrl && (
@@ -529,7 +560,9 @@ function App() {
       </section>
 
       {/* ── News & Updates Section (Issue #191) ─────────────────────────── */}
-      <NewsSection />
+      <Suspense fallback={<LazyFallback />}>
+        <NewsSection />
+      </Suspense>
 
       {/* ── Holdings + Buy Card ─────────────────────────────────────────── */}
       {publicKey && (
@@ -551,22 +584,27 @@ function App() {
 
       {/* ── Price Alerts (Issue #188) ─────────────────────────────────────── */}
       {CONTRACT_ID.length >= 50 && pricePerShare != null && (
-        <PriceAlert
-          contractId={CONTRACT_ID}
-          assetTitle={assetMeta?.title || 'Asset'}
-          currentPrice={pricePerShare}
-        />
+        <Suspense fallback={<LazyFallback />}>
+          <PriceAlert
+            contractId={CONTRACT_ID}
+            assetTitle={assetMeta?.title || 'Asset'}
+            currentPrice={pricePerShare}
+          />
+        </Suspense>
       )}
 
       {/* ── Investment Calculator (Issue #189) ───────────────────────────── */}
-      <InvestmentCalculator
-        pricePerShare={pricePerShare}
-        assetTitle={assetMeta?.title || 'Asset'}
-        totalShares={totalShares}
-        availableShares={availableShares}
-      />
+      <Suspense fallback={<LazyFallback />}>
+        <InvestmentCalculator
+          pricePerShare={pricePerShare}
+          assetTitle={assetMeta?.title || 'Asset'}
+          totalShares={totalShares}
+          availableShares={availableShares}
+        />
+      </Suspense>
         </>
       )}
+      </Suspense>
 
       {confirmPending && (
         <ConfirmPurchase shares={buyAmount} pricePerShare={pricePerShare} onConfirm={handleConfirmBuy} onCancel={() => setConfirmPending(false)} loading={loadingBuy} />
