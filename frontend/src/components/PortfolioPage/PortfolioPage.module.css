@@ -91,14 +91,16 @@
   letter-spacing: 0.05em;
 }
 
+/* Issue #372 — Add Tx Hash column */
 .tableHeaderWithAction {
-  grid-template-columns: 1fr 100px 100px 120px 80px;
+  grid-template-columns: 1fr 80px 100px 120px 140px 80px;
 }
 
 .colAsset { text-align: left; }
 .colShares { text-align: right; }
 .colPrice { text-align: right; }
 .colValue { text-align: right; }
+.colTxHash { text-align: center; font-family: monospace; }
 .colAction { text-align: center; }
 
 /* Row card */
@@ -108,9 +110,22 @@
 
 .row {
   display: grid;
-  grid-template-columns: 1fr 100px 100px 120px 80px;
+  grid-template-columns: 1fr 80px 100px 120px 140px 80px;
   gap: var(--spacing-md);
   align-items: center;
+}
+
+/* Tx hash display */
+.txHashText {
+  font-family: monospace;
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.txHashEmpty {
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
 }
 
 @media (max-width: 600px) {

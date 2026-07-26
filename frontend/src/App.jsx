@@ -21,6 +21,7 @@ import EmptyState from './components/EmptyState/EmptyState';
 import OptimizedImage from './components/OptimizedImage/OptimizedImage';
 import styles from './App.module.css';
 import Breadcrumbs from './components/Breadcrumbs/Breadcrumbs';
+import PriceRangeFilter from './components/PriceRangeFilter/PriceRangeFilter';
 
 import { useWalletStore } from './store/useWalletStore';
 import {
@@ -485,6 +486,9 @@ function App() {
   const [acceptedTokens, setAcceptedTokens] = useState([]);
   const [paymentToken, setPaymentToken] = useState('');
 
+  // ── Issue #373: Price range filter state ──────────────────────────────────
+  const [priceRangeFilter, setPriceRangeFilter] = useState(null); // null = not set
+
   useEffect(() => {
     if (!publicKey || CONTRACT_ID.length < 50) return;
     (async () => {
@@ -815,12 +819,53 @@ function App() {
             {/* ── Asset Listing Grid ─────────────────────────────────────────── */}
             <section className={styles.section}>
               <h2 className={styles.sectionTitle}>{t('marketplace.availableAssets')}</h2>
-              <AssetGrid
-                assets={assets}
-                loading={isFetchingAssets}
-                error={assetsError}
-                isEmpty={!isFetchingAssets && !assetsError && assets.length === 0}
-              />
+
+              {/* Issue #373 — Price range filter sidebar */}
+              {(() => {
+                // Derive price bounds from loaded assets (assets may have a `price` field
+                // or fall back to 0 when the on-chain price is not embedded in metadata)
+                const prices = assets
+                  .map((a) => Number(a.price ?? a.pricePerShare ?? 0))
+                  .filter((p) => p > 0);
+                const absoluteMin = prices.length ? Math.min(...prices) : 0;
+                const absoluteMax = prices.length ? Math.max(...prices) : 10_000;
+
+                // Effective filter bounds (default to full range when not set)
+                const [filterMin, filterMax] = priceRangeFilter ?? [absoluteMin, absoluteMax];
+
+                // Client-side filtered assets (Issue #373)
+                const filteredAssets =
+                  priceRangeFilter && prices.length > 0
+                    ? assets.filter((a) => {
+                        const p = Number(a.price ?? a.pricePerShare ?? 0);
+                        // If an asset has no price data, include it so it stays visible
+                        if (p === 0) return true;
+                        return p >= filterMin && p <= filterMax;
+                      })
+                    : assets;
+
+                return (
+                  <>
+                    {/* Show price filter only once at least one asset has price data */}
+                    {prices.length > 0 && (
+                      <PriceRangeFilter
+                        min={absoluteMin}
+                        max={absoluteMax}
+                        value={[filterMin, filterMax]}
+                        onChange={(range) => setPriceRangeFilter(range)}
+                        onClear={() => setPriceRangeFilter(null)}
+                      />
+                    )}
+
+                    <AssetGrid
+                      assets={filteredAssets}
+                      loading={isFetchingAssets}
+                      error={assetsError}
+                      isEmpty={!isFetchingAssets && !assetsError && filteredAssets.length === 0}
+                    />
+                  </>
+                );
+              })()}
             </section>
 
             {/* ── News & Updates Section (Issue #191) ─────────────────────────── */}
