@@ -20,6 +20,7 @@ import VirtualTour from './components/VirtualTour/VirtualTour';
 import EmptyState from './components/EmptyState/EmptyState';
 import OptimizedImage from './components/OptimizedImage/OptimizedImage';
 import styles from './App.module.css';
+import Breadcrumbs from './components/Breadcrumbs/Breadcrumbs';
 
 // ── Route-based code splitting (Issue #304) ──────────────────────────────────
 // Heavy view components are lazy-loaded to reduce initial bundle size.
@@ -470,6 +471,19 @@ function App() {
           ★ Favorites
         </button>
       </nav>
+
+      {/* Breadcrumb navigation (Issue #301) */}
+      <Breadcrumbs
+        labels={{
+          marketplace: 'Marketplace',
+          portfolio: 'Portfolio',
+          admin: 'Admin',
+          history: 'History',
+          compare: 'Compare',
+          favorites: 'Favorites',
+          profile: 'Profile',
+        }}
+      />
 
       <ToastContainer />
 
