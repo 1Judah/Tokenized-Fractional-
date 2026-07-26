@@ -10,6 +10,29 @@ const base = {
   },
 };
 
+// Issue #317: Read replica configuration
+const readReplicaConfig = {
+  // Primary connection (writes)
+  primary: {
+    ...base,
+    client: 'pg',
+    connection: process.env.DATABASE_URL,
+    pool: { min: 2, max: 20 },
+  },
+  // Replica connections (reads) - comma-separated URLs
+  replicas: (process.env.READ_REPLICA_URLS || '')
+    .split(',')
+    .filter(Boolean)
+    .map((url) => ({
+      ...base,
+      client: 'pg',
+      connection: url.trim(),
+      pool: { min: 1, max: 15 },
+    })),
+};
+
+export { readReplicaConfig };
+
 export default {
   development: {
     ...base,
@@ -30,6 +53,8 @@ export default {
   production: {
     ...base,
     client: 'pg',
+    connection: process.env.DATABASE_URL,
+    pool: { min: 2, max: 20 },
     connection: {
       connectionString: process.env.DATABASE_URL,
       ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: false } : false,
