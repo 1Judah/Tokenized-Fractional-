@@ -18,6 +18,7 @@ import helmet from 'helmet';
 import pinoHttp from 'pino-http';
 import * as Sentry from '@sentry/node';
 import swaggerUi from 'swagger-ui-express';
+import swaggerJSDoc from 'swagger-jsdoc';
 import prometheus from 'express-prom-bundle';
 
 import { CORS_ORIGINS, SENTRY_DSN, SENTRY_TRACES_SAMPLE_RATE, SENTRY_PROFILES_SAMPLE_RATE, REDIS_URL, DEPLOYMENT_COLOR, SERVICE_NAME, BUILD_ID, NODE_ENV } from './config.js';
@@ -73,6 +74,10 @@ let transactionService = null;
 let analyticsRoutes = null;
 let purchasesRoutes = null;
 let rateLimitingRoutes = null;
+let webhookService = null;
+let webhookRoutes = null;
+let flashLoanProtectionService = null;
+let flashLoanProtectionRoutes = null;
 
 /**
  * Initialize the app with database services.
@@ -142,6 +147,7 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'x-api-key', 'X-Request-ID'],
 }));
 app.use(express.json({ limit: '10kb' }));
+app.use(partialResponseMiddleware());
 
 // Request-ID middleware
 app.use((req, res, next) => {
@@ -180,11 +186,39 @@ app.get('/metrics', async (_req, res) => {
   res.send(await metricsMiddleware.promClient.register.metrics());
 });
 
-// Swagger docs
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+// Swagger docs — generated from JSDoc @openapi annotations + static spec (Issue #295)
+const fullSwaggerSpec = swaggerJSDoc({
+  definition: swaggerSpec,
+  apis: [
+    './src/routes/rwa.js',
+    './src/routes/analytics.js',
+    './src/routes/purchases.js',
+    './src/routes/apiKeys.js',
+    './src/routes/webhooks.js',
+    './src/routes/flashLoanProtection.js',
+  ],
+});
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(fullSwaggerSpec, {
   customSiteTitle: 'RWA Marketplace API Docs',
+  customCss: '.swagger-ui .topbar { display: none }',
+  swaggerOptions: {
+    docExpansion: 'none',
+    filter: true,
+    displayRequestDuration: true,
+  },
 }));
-app.get('/api-docs.json', (_req, res) => res.json(swaggerSpec));
+app.get('/api-docs.json', (_req, res) => res.json(fullSwaggerSpec));
+
+// GraphQL schema documentation endpoint (Issue #295)
+app.get('/graphql/docs', (_req, res) => {
+  res.json({
+    endpoint: '/graphql',
+    playground: process.env.NODE_ENV !== 'production' || process.env.ENABLE_GRAPHQL_PLAYGROUND === 'true',
+    stitchingInfo: '/graphql/stitching/info',
+    schemaVersion: '2.0.0',
+    message: 'See docs/api/graphql-schema.md for full type documentation',
+  });
+});
 
 // Admin key verification (requires initialization)
 app.get('/api/admin/verify', (req, res, next) => adminAuth(req, res, next), (_req, res) => res.json({ ok: true }));
@@ -307,6 +341,76 @@ app.use('/api/rate-limiting', (req, res, next) => {
     });
   }
   rateLimitingRoutes(req, res, next);
+});
+
+// Mount Webhook management routes
+app.use('/api/v1/webhooks', (req, res, next) => {
+  if (!webhookRoutes) {
+    return res.status(503).json({ error: 'Webhook service not initialized', code: 'SERVICE_UNAVAILABLE' });
+  }
+  webhookRoutes(req, res, next);
+});
+
+app.use('/api/webhooks', (req, res, next) => {
+  if (!webhookRoutes) {
+    return res.status(503).json({ error: 'Webhook service not initialized', code: 'SERVICE_UNAVAILABLE' });
+  }
+  webhookRoutes(req, res, next);
+});
+
+// Mount Flash Loan Protection routes
+app.use('/api/v1/flash-loan-protection', (req, res, next) => {
+  if (!flashLoanProtectionRoutes) {
+    return res.status(503).json({ error: 'Flash loan protection service not initialized', code: 'SERVICE_UNAVAILABLE' });
+  }
+  flashLoanProtectionRoutes(req, res, next);
+});
+
+app.use('/api/flash-loan-protection', (req, res, next) => {
+  if (!flashLoanProtectionRoutes) {
+    return res.status(503).json({ error: 'Flash loan protection service not initialized', code: 'SERVICE_UNAVAILABLE' });
+  }
+  flashLoanProtectionRoutes(req, res, next);
+});
+
+// Mount GraphQL Security Middleware
+app.use('/graphql', createGraphQLPlaygroundSecurityMiddleware());
+
+// ── GraphQL Schema Stitching endpoints (Issue #294) ──────────────────────────
+// Expose stitching metrics, health, and schema info
+app.get('/graphql/stitching/health', (_req, res) => {
+  const metrics = stitchingMetrics.getMetrics();
+  res.json({
+    status: 'ok',
+    schemaVersion: getSchemaVersion(),
+    services: stitchingConfig.subschemas.map((s) => ({
+      name: s.name,
+      endpoint: s.endpoint,
+      enabled: s.enabled,
+    })),
+    metrics: {
+      totalQueries: metrics.totalQueries,
+      errorRate: metrics.errorRate,
+    },
+  });
+});
+
+app.get('/graphql/stitching/metrics', (_req, res) => {
+  res.setHeader('Content-Type', 'text/plain');
+  res.send(stitchingMetrics.toPrometheus());
+});
+
+app.get('/graphql/stitching/info', (_req, res) => {
+  res.json({
+    version: getSchemaVersion(),
+    subschemas: stitchingConfig.subschemas.map((s) => ({
+      name: s.name,
+      endpoint: s.endpoint,
+      enabled: s.enabled,
+      mergeTypes: s.mergeTypes || [],
+    })),
+    conflictResolution: Object.keys(stitchingConfig.conflictResolution),
+  });
 });
 
 // 404 handler

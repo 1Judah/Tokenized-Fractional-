@@ -43,6 +43,9 @@ export default defineConfig({
       },
     }),
   ],
+  build: {
+    target: 'esnext',
+  },
   server: {
     port: 5173,
     host: true,
@@ -58,5 +61,10 @@ export default defineConfig({
         "frame-ancestors 'none'",
       ].join('; '),
     },
+  },
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: './src/test/setup.js',
   },
 });

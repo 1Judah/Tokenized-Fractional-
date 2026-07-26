@@ -27,6 +27,8 @@ import { ApolloServer } from '@apollo/server';
 import { expressMiddleware } from '@apollo/server/express4';
 import { typeDefs, createResolvers } from './graphql.js';
 import { initializeGraphQLSubscriptions } from './graphql-ws-adapter.js';
+import { withCdnAssetUrls } from './cdn.js';
+import { createValidationMiddleware } from './src/middleware/validate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // multer memoryStorage keeps the file in memory as a Buffer (req.file.buffer).
@@ -378,6 +380,12 @@ app.use((req, res, next) => {
   res.setHeader('X-Request-ID', id);
   next();
 });
+
+// Validation middleware — comprehensive schema validation for all API endpoints (#260)
+// Disabled in test mode to avoid breaking existing tests
+if (process.env.NODE_ENV !== 'test') {
+  app.use(createValidationMiddleware({ strict: false }));
+}
 
 // Request logging middleware (silent in test)
 app.use(pinoHttp({

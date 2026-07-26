@@ -4,11 +4,14 @@
   "description": "Off-chain metadata API for RWA marketplace",
   "main": "src/server.js",
   "type": "module",
+  "engines": {
+    "node": ">=20.18.0"
+  },
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --experimental-vm-modules node_modules/.bin/jest --forceExit",
-    "deploy": "echo 'Push to main — Render auto-deploys via render.yaml'",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --forceExit",
+    "deploy": "echo 'Push to main \u2014 Render auto-deploys via render.yaml'",
     "migrate": "knex migrate:latest",
     "migrate:rollback": "knex migrate:rollback",
     "migrate:make": "knex migrate:make",
@@ -20,7 +23,9 @@
     "backup": "node backup.js",
     "backup:list": "node backup.js --list",
     "backup:verify": "node backup.js --verify-latest",
-    "restore": "node restore.js"
+    "restore": "node restore.js",
+    "docs:generate": "node scripts/generate-docs.js",
+    "docs:serve": "node scripts/generate-docs.js && echo \"Docs generated in docs/api/\""
   },
   "jest": {
     "testEnvironment": "node",
@@ -39,6 +44,7 @@
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^11.10.0",
     "cors": "^2.8.5",
+    "dataloader": "^2.2.2",
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
     "express-prom-bundle": "^7.0.0",

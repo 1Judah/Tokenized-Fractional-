@@ -25,10 +25,35 @@ export default {
     useNullAsDefault: true,
   },
 
+  // Issue #314: Optimized production connection pooling
+  // Tuned for high concurrency with health checks and leak detection
   production: {
     ...base,
     client: 'pg',
-    connection: process.env.DATABASE_URL,
-    pool: { min: 2, max: 10 },
+    connection: {
+      connectionString: process.env.DATABASE_URL,
+      ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: false } : false,
+    },
+    pool: {
+      min: parseInt(process.env.DB_POOL_MIN, 10) || 2,
+      max: parseInt(process.env.DB_POOL_MAX, 10) || 20,
+      acquireTimeoutMillis: parseInt(process.env.DB_ACQUIRE_TIMEOUT, 10) || 30000,
+      createTimeoutMillis: parseInt(process.env.DB_CREATE_TIMEOUT, 10) || 5000,
+      destroyTimeoutMillis: parseInt(process.env.DB_DESTROY_TIMEOUT, 10) || 5000,
+      idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT, 10) || 60000,
+      reapIntervalMillis: parseInt(process.env.DB_REAP_INTERVAL, 10) || 1000,
+      createRetryIntervalMillis: parseInt(process.env.DB_CREATE_RETRY_INTERVAL, 10) || 100,
+      propagateCreateError: false,
+      afterCreate: (conn, done) => {
+        // Validate connection on creation
+        conn.query('SELECT 1', (err) => {
+          if (err) {
+            done(err, conn);
+          } else {
+            done(null, conn);
+          }
+        });
+      },
+    },
   },
 };
