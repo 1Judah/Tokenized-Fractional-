@@ -9,9 +9,12 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:ci": "VITE_PERF_BUDGET_FAIL=true vite build",
     "preview": "vite preview",
     "test": "node node_modules/vitest/dist/cli.js run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:coverage:ci": "vitest run --coverage --reporter=junit --outputFile=test-results.xml",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
     "deploy": "npm run build && echo 'Build complete — Render auto-deploys via render.yaml'",
@@ -19,7 +22,8 @@
     "test:e2e:ui": "playwright test --ui",
     "lint": "eslint . --ext .js,.jsx",
     "lint:ci": "eslint . --ext .js,.jsx --max-warnings=0",
-    "lint:fix": "eslint . --ext .js,.jsx --fix"
+    "lint:fix": "eslint . --ext .js,.jsx --fix",
+    "perf:check": "node scripts/check-performance-budget.js"
   },
   "dependencies": {
     "@sentry/react": "^10.60.0",
@@ -30,6 +34,7 @@
     "i18next-browser-languagedetector": "^8.0.0",
     "jspdf": "^2.5.2",
     "react": "^18.3.1",
+    "web-vitals": "^4.2.4",
     "react-dom": "^18.3.1",
     "react-i18next": "^15.0.0",
     "react-router-dom": "^6.27.0",
@@ -69,6 +74,7 @@
     "vite-plugin-pwa": "^0.21.1",
     "vite-plugin-sri3": "^2.0.0",
     "vitest": "^2.1.9",
+    "@vitest/coverage-v8": "^2.1.9",
     "workbox-window": "^7.3.0"
   }
 }
