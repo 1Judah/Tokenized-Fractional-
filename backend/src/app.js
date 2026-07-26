@@ -34,6 +34,8 @@ import { createTransactionService } from './services/transactionService.js';
 import { createAnalyticsRoutes } from './routes/analytics.js';
 import { createPurchaseRoutes } from './routes/purchases.js';
 import { createRateLimitingRoutes } from './routes/rateLimiting.js';
+import { createFederatedGraphQLServer } from './federation/gateway.js';
+import * as dataService from './services/dataService.js';
 
 // ── Sentry init ───────────────────────────────────────────────────────────────
 if (SENTRY_DSN && process.env.NODE_ENV !== 'test') {
@@ -111,7 +113,16 @@ export async function initializeApp() {
     // Setup rate limiting routes
     rateLimitingRoutes = createRateLimitingRoutes(logger, adminAuth);
 
-    return { db, apiKeyService, transactionService };
+    // Initialize GraphQL Federation Gateway
+    const federatedGraphQL = await createFederatedGraphQLServer({
+      dataLayer: dataService,
+      transactionService,
+      logger,
+    });
+    app.use('/graphql', federatedGraphQL.middleware);
+    logger.info('GraphQL Federation gateway initialized at /graphql');
+
+    return { db, apiKeyService, transactionService, federatedGraphQL };
   } catch (error) {
     logger.error({ error: error.message }, 'Failed to initialize app');
     throw error;
