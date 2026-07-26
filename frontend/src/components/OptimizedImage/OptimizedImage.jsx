@@ -99,6 +99,8 @@ function OptimizedImage({
   const handleError = () => { setError(true); setLoaded(true); };
 
   const wrapperStyle = {
+    ...(width ? { width: typeof width === 'number' ? `${width}px` : width } : undefined),
+    ...(height ? { height: typeof height === 'number' ? `${height}px` : height } : undefined),
     ...(width ? { width: (typeof width === 'number' ? `${width}px` : width) } : undefined),
     ...(height ? { height: (typeof height === 'number' ? `${height}px` : height) } : undefined),
     ...(ratio ? { aspectRatio: ratio } : undefined),
