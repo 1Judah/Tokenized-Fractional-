@@ -154,3 +154,224 @@ self.addEventListener('message', (event) => {
     self.skipWaiting();
   }
 });
+
+
+// ── Issue #308: Enhanced PWA Service Worker ─────────────────────────────────────
+// Cache versioning + invalidation strategy
+const CACHE_VERSION = 'v2';
+const CACHE_NAMES = {
+  static: `static-assets-${CACHE_VERSION}`,
+  apiRwa: `api-rwa-${CACHE_VERSION}`,
+  apiMisc: `api-misc-${CACHE_VERSION}`,
+  adminWrites: `admin-writes-${CACHE_VERSION}`,
+  googleFonts: `google-fonts-${CACHE_VERSION}`,
+  images: `images-${CACHE_VERSION}`,
+};
+
+// ── Cache versioning & cleanup ──────────────────────────────────────────────────
+// Delete old caches when a new SW version activates
+self.addEventListener('activate', (event) => {
+  const validCacheNames = Object.values(CACHE_NAMES);
+  event.waitUntil(
+    (async () => {
+      const cacheKeys = await caches.keys();
+      await Promise.all(
+        cacheKeys
+          .filter((key) => !validCacheNames.some((valid) => key === valid || key.startsWith(valid)))
+          .map((key) => {
+            console.log('[SW] Deleting old cache:', key);
+            return caches.delete(key);
+          })
+      );
+      // Claim all clients immediately
+      await self.clients.claim();
+    })()
+  );
+});
+
+// ── Image caching — CacheFirst with long expiry + blur placeholders ───────────
+registerRoute(
+  ({ request }) => request.destination === 'image' && !request.url.includes('data:'),
+  new CacheFirst({
+    cacheName: CACHE_NAMES.images,
+    plugins: [
+      new CacheableResponsePlugin({ statuses: [0, 200] }),
+      new ExpirationPlugin({
+        maxEntries: 200,
+        maxAgeSeconds: 90 * 24 * 60 * 60, // 90 days
+        purgeOnQuotaError: true,
+      }),
+    ],
+  })
+);
+
+// ── Periodic Background Sync for data updates ─────────────────────────────────
+// Periodically refresh cached API data when the app is in the background
+self.addEventListener('periodicsync', (event) => {
+  if (event.tag === 'refresh-marketplace-data') {
+    event.waitUntil(refreshMarketplaceData());
+  }
+});
+
+async function refreshMarketplaceData() {
+  try {
+    const cache = await caches.open(CACHE_NAMES.apiRwa);
+    const requests = await cache.keys();
+    // Re-fetch and update cached API responses in the background
+    await Promise.all(
+      requests.map(async (request) => {
+        try {
+          const response = await fetch(request);
+          if (response.ok) {
+            await cache.put(request, response.clone());
+          }
+        } catch {
+          // Network failed — keep stale data
+        }
+      })
+    );
+  } catch (err) {
+    console.error('[SW] Periodic sync failed:', err);
+  }
+}
+
+// ── Enhanced Background Sync with retry tracking ───────────────────────────────
+// Track failed requests for better UX feedback
+const failedRequestsStore = 'failed-requests';
+let pendingQueueSize = 0;
+
+self.addEventListener('sync', (event) => {
+  if (event.tag === 'admin-writes-queue') {
+    event.waitUntil(replayFailedRequests());
+  }
+});
+
+async function replayFailedRequests() {
+  try {
+    const db = await openDB();
+    const requests = await getAllFromDB(db, failedRequestsStore);
+    pendingQueueSize = requests.length;
+
+    for (const requestData of requests) {
+      try {
+        const response = await fetch(requestData.url, requestData.options);
+        if (response.ok) {
+          await deleteFromDB(db, failedRequestsStore, requestData.id);
+          pendingQueueSize--;
+          // Notify clients of successful replay
+          const clients = await self.clients.matchAll();
+          clients.forEach((client) => {
+            client.postMessage({ type: 'BG_SYNC_SUCCESS', url: requestData.url });
+          });
+        }
+      } catch (err) {
+        // Will be retried on next sync event
+        break;
+      }
+    }
+  } catch (err) {
+    console.error('[SW] Background sync replay failed:', err);
+  }
+}
+
+// Simple IndexedDB helpers for tracking failed requests
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('sw-bg-sync-db', 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(failedRequestsStore)) {
+        db.createObjectStore(failedRequestsStore, { keyPath: 'id', autoIncrement: true });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function getAllFromDB(db, store) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, 'readonly');
+    const req = tx.objectStore(store).getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function deleteFromDB(db, store, id) {
+  return new Promise((resolve) => {
+    const tx = db.transaction(store, 'readwrite');
+    tx.objectStore(store).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => resolve();
+  });
+}
+
+// ── Cache management: respond to messages from the app ────────────────────────
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+
+  if (event.data && event.data.type === 'CLEAR_CACHES') {
+    event.waitUntil(
+      (async () => {
+        const cacheKeys = await caches.keys();
+        await Promise.all(cacheKeys.map((key) => caches.delete(key)));
+        // Notify the app that caches were cleared
+        event.source?.postMessage({ type: 'CACHES_CLEARED' });
+      })()
+    );
+  }
+
+  if (event.data && event.data.type === 'GET_CACHE_SIZE') {
+    event.waitUntil(
+      (async () => {
+        const cacheKeys = await caches.keys();
+        let totalSize = 0;
+        for (const key of cacheKeys) {
+          const cache = await caches.open(key);
+          const requests = await cache.keys();
+          for (const req of requests) {
+            const response = await cache.match(req);
+            if (response) {
+              const blob = await response.blob();
+              totalSize += blob.size;
+            }
+          }
+        }
+        event.source?.postMessage({
+          type: 'CACHE_SIZE',
+          size: totalSize,
+          sizeMB: (totalSize / (1024 * 1024)).toFixed(2),
+          cacheCount: cacheKeys.length,
+        });
+      })()
+    );
+  }
+
+  if (event.data && event.data.type === 'GET_BG_SYNC_QUEUE') {
+    event.source?.postMessage({
+      type: 'BG_SYNC_QUEUE',
+      pending: pendingQueueSize,
+    });
+  }
+});
+
+// ── Push notification enhancements ─────────────────────────────────────────────
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  if (event.action) {
+    // Handle custom notification actions
+    console.log('[SW] Notification action:', event.action);
+  }
+  // Focus or open the app
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window' }).then((clientList) => {
+      if (clientList.length > 0) {
+        return clientList[0].focus();
+      }
+      return self.clients.openWindow('/');
+    })
+  );
+});
