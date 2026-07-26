@@ -433,7 +433,14 @@ const options = {
       },
     },
   },
-  apis: [],
+  apis: [
+    './src/routes/rwa.js',
+    './src/routes/analytics.js',
+    './src/routes/purchases.js',
+    './src/routes/apiKeys.js',
+    './src/routes/webhooks.js',
+    './src/routes/flashLoanProtection.js',
+  ],
 };
 
 export const swaggerSpec = options.definition;

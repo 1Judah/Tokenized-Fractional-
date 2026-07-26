@@ -11,6 +11,11 @@ export const WS_EVENT_TYPES = {
   AVAILABILITY_CHANGED: 'availability_changed',
   MARKETPLACE_PAUSED: 'marketplace_paused',
   MARKETPLACE_UNPAUSED: 'marketplace_unpaused',
+  TIME_WINDOW_CREATED: 'time_window_created',
+  TIME_WINDOW_UPDATED: 'time_window_updated',
+  TIME_WINDOW_CANCELLED: 'time_window_cancelled',
+  TIME_WINDOW_PURCHASED: 'time_window_purchased',
+  TIME_WINDOW_EXPIRED: 'time_window_expired',
   CONNECTION_ESTABLISHED: 'connection_established',
   SUBSCRIPTION_CONFIRMED: 'subscription_confirmed',
   ERROR: 'error',
@@ -265,11 +270,13 @@ export function useMarketplaceWebSocket(wsUrl, onEvent, options = {}) {
       subscribe('marketplace-status');
       subscribe('share-purchases');
       subscribe('assets');
+      subscribe('time-windows');
 
       return () => {
         unsubscribe('marketplace-status');
         unsubscribe('share-purchases');
         unsubscribe('assets');
+        unsubscribe('time-windows');
       };
     }
   }, [wsState.connected, subscribe, unsubscribe]);
