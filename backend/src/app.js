@@ -37,6 +37,15 @@ import { createPurchaseRoutes } from './routes/purchases.js';
 import { createRateLimitingRoutes } from './routes/rateLimiting.js';
 import { createFederatedGraphQLServer } from './federation/gateway.js';
 import * as dataService from './services/dataService.js';
+import { partialResponseMiddleware } from './middleware/partialResponse.js';
+import { createWebhookService } from './services/webhookService.js';
+import { createWebhookRoutes } from './routes/webhooks.js';
+import { createFlashLoanProtectionService } from './services/flashLoanProtectionService.js';
+import { createFlashLoanProtectionRoutes } from './routes/flashLoanProtection.js';
+import { createGraphQLPlaygroundSecurityMiddleware } from '../graphql.js';
+import { createApiMonitoringRoutes } from './routes/apiMonitoring.js';
+import { requestLogger } from './middleware/requestLogger.js';
+import { stitchingMetrics, getSchemaVersion, stitchingConfig } from '../graphql-stitching.js';
 
 // ── Sentry init ───────────────────────────────────────────────────────────────
 if (SENTRY_DSN && process.env.NODE_ENV !== 'test') {
@@ -156,6 +165,9 @@ app.use((req, res, next) => {
   res.setHeader('X-Request-ID', id);
   next();
 });
+
+// API request logging middleware
+app.use(requestLogger);
 
 // HTTP request logging (silent in test)
 app.use(pinoHttp({
@@ -372,6 +384,11 @@ app.use('/api/flash-loan-protection', (req, res, next) => {
   }
   flashLoanProtectionRoutes(req, res, next);
 });
+
+// Mount API Monitoring routes
+const apiMonitoringRoutes = createApiMonitoringRoutes();
+app.use('/api/v1/api-monitor', apiMonitoringRoutes);
+app.use('/api/api-monitor', apiMonitoringRoutes);
 
 // Mount GraphQL Security Middleware
 app.use('/graphql', createGraphQLPlaygroundSecurityMiddleware());
