@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, memo } from 'react';
+import OptimizedImage from '../OptimizedImage/OptimizedImage';
 import Card from '../Card/Card';
 import PriceHistoryModal from '../PriceHistoryChart/PriceHistoryModal';
 import { useComparisonStore } from '../../store/useComparisonStore';
@@ -19,7 +20,7 @@ import styles from './AssetCard.module.css';
  * @param {string}  asset.contractId - On-chain contract ID
  * @param {string}  asset.assetType  - Type of asset
  */
-export default function AssetCard({ asset }) {
+function AssetCard({ asset }) {
   const [showPriceHistory, setShowPriceHistory] = useState(false);
 
   if (!asset) return null;
@@ -67,11 +68,12 @@ export default function AssetCard({ asset }) {
       <Card hoverable className={styles.assetCard}>
         {imageUrl ? (
           <div className={styles.imageWrapper}>
-            <img
+            <OptimizedImage
               src={imageUrl}
               alt={title || 'Asset'}
               className={styles.image}
-              loading="lazy"
+              sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 300px"
+              ratio="4/3"
             />
             {/* Bookmark button overlaid on image */}
             <button
@@ -225,3 +227,5 @@ export default function AssetCard({ asset }) {
     </>
   );
 }
+
+export default memo(AssetCard);
