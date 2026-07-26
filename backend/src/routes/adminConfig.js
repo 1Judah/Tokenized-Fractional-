@@ -11,6 +11,9 @@
 import { Router } from 'express';
 import { adminAuth } from '../middleware/auth.js';
 import { writeLimiter } from '../middleware/rateLimiter.js';
+import { createAuditLogService } from '../services/auditLogService.js';
+
+const auditLogService = createAuditLogService();
 
 // In-memory config store (production would use database)
 let platformConfig = {
@@ -41,23 +44,6 @@ let platformConfig = {
   lastUpdated: new Date().toISOString(),
   updatedBy: null,
 };
-
-// Audit log
-const auditLog = [];
-const MAX_AUDIT_ENTRIES = 1000;
-
-function logAuditAction(action, adminKey, details) {
-  auditLog.push({
-    id: `audit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-    action,
-    adminKey,
-    timestamp: new Date().toISOString(),
-    details,
-  });
-  if (auditLog.length > MAX_AUDIT_ENTRIES) {
-    auditLog.splice(0, auditLog.length - MAX_AUDIT_ENTRIES);
-  }
-}
 
 // Validation helpers
 const validators = {
@@ -154,7 +140,7 @@ export function createAdminConfigRoutes() {
     platformConfig.updatedBy = adminKey;
 
     // Log audit
-    logAuditAction('config_update', adminKey, changedFields);
+    auditLogService.logAction('config_update', adminKey, changedFields, req);
 
     res.json({
       config: platformConfig,
@@ -194,7 +180,7 @@ export function createAdminConfigRoutes() {
     };
 
     // Log audit
-    logAuditAction('config_replace', adminKey, { old: oldConfig, new: platformConfig });
+    auditLogService.logAction('config_replace', adminKey, { old: oldConfig, new: platformConfig }, req);
 
     res.json({
       config: platformConfig,
@@ -249,7 +235,7 @@ export function createAdminConfigRoutes() {
       updatedBy: adminKey,
     };
 
-    logAuditAction('config_reset', adminKey, { old: oldConfig });
+    auditLogService.logAction('config_reset', adminKey, { old: oldConfig }, req);
 
     res.json({
       config: platformConfig,
@@ -258,18 +244,20 @@ export function createAdminConfigRoutes() {
   });
 
   // GET /admin/config/audit - Get audit log
-  router.get('/config/audit', adminAuth, (req, res) => {
-    const limit = Math.min(parseInt(req.query.limit, 10) || 100, MAX_AUDIT_ENTRIES);
+  router.get('/config/audit', adminAuth, async (req, res) => {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 100, 1000);
     const offset = parseInt(req.query.offset, 10) || 0;
 
-    const entries = auditLog.slice().reverse().slice(offset, offset + limit);
-
-    res.json({
-      entries,
-      total: auditLog.length,
+    const result = await auditLogService.getLogs({
+      action: req.query.action,
+      userId: req.query.userId,
+      startDate: req.query.startDate,
+      endDate: req.query.endDate,
       limit,
       offset,
     });
+
+    res.json(result);
   });
 
   // POST /admin/config/export - Export configuration
@@ -283,7 +271,8 @@ export function createAdminConfigRoutes() {
     };
 
     if (includeAudit) {
-      exportData.auditLog = auditLog.slice(-100); // Last 100 entries
+      const { entries } = await auditLogService.getLogs({ limit: 100 });
+      exportData.auditLog = entries;
     }
 
     res.setHeader('Content-Type', 'application/json');
@@ -330,7 +319,7 @@ export function createAdminConfigRoutes() {
       });
     }
 
-    logAuditAction('config_import', adminKey, { old: oldConfig, imported: importedConfig });
+    auditLogService.logAction('config_import', adminKey, { old: oldConfig, imported: importedConfig }, req);
 
     res.json({
       config: platformConfig,
