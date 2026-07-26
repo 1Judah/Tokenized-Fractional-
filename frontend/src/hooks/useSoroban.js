@@ -1,10 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { signTransaction } from '@stellar/freighter-api';
-import { rpc, TransactionBuilder, Networks, Contract } from '@stellar/stellar-sdk';
-import { useWalletStore } from '../store/useWalletStore';
+import { useState, useEffect, useCallback, useRef } from "react";
+import { signTransaction } from "@stellar/freighter-api";
+import { rpc, TransactionBuilder, Networks, Contract } from "@stellar/stellar-sdk";
+import { useWalletStore } from "../store/useWalletStore";
 
-const CONTRACT_ID = import.meta.env.VITE_CONTRACT_ID || 'C...';
-const RPC_URL = import.meta.env.VITE_RPC_URL || 'https://soroban-testnet.stellar.org:443';
+const CONTRACT_ID = import.meta.env.VITE_CONTRACT_ID || "C...";
+const RPC_URL = import.meta.env.VITE_RPC_URL || "https://soroban-testnet.stellar.org:443";
 const NETWORK_PASSPHRASE = import.meta.env.VITE_NETWORK_PASSPHRASE || Networks.TESTNET;
 
 const server = new rpc.Server(RPC_URL);
@@ -14,10 +14,6 @@ function getContract() {
   try { return new Contract(CONTRACT_ID); } catch { return null; }
 }
 
-/**
- * useStellarContract
- * Provides shared contract configurations, the Server instance, and network passphrase.
- */
 export function useStellarContract() {
   return {
     contract: getContract(),
@@ -27,33 +23,47 @@ export function useStellarContract() {
   };
 }
 
-/**
- * Helper to serialize hook dependencies including XDR ScVal objects.
- */
 const serializeArgs = (args) => {
-  if (!args) return '';
+  if (!args) return "";
   return args
     .map((arg) => {
-      if (arg && typeof arg === 'object' && typeof arg.toXDR === 'function') {
-        try {
-          return arg.toXDR('base64');
-        } catch {
-          return String(arg);
-        }
+      if (arg && typeof arg === "object" && typeof arg.toXDR === "function") {
+        try { return arg.toXDR("base64"); } catch { return String(arg); }
       }
-      try {
-        return JSON.stringify(arg);
-      } catch {
-        return String(arg);
-      }
+      try { return JSON.stringify(arg); } catch { return String(arg); }
     })
-    .join(',');
+    .join(",");
 };
 
-/**
- * useSorobanRead
- * Hook for executing read-only contract query functions (via simulation).
- */
+const withRetry = async (operationFn, operationName) => {
+  const MAX_RETRIES = 3;
+  let attempt = 0;
+
+  while (attempt <= MAX_RETRIES) {
+    try {
+      return await operationFn();
+    } catch (error) {
+      const isRateLimited = error?.message?.includes("429") || error?.response?.status === 429;
+      const isServiceUnavailable = error?.message?.includes("503") || error?.response?.status === 503;
+
+      if ((!isRateLimited && !isServiceUnavailable) || attempt === MAX_RETRIES) {
+        throw error;
+      }
+
+      attempt++;
+      const delay = Math.min(500 * Math.pow(2, attempt - 1), 5000);
+      const warningMsg = `Network busy. Retrying ${operationName}... (Attempt ${attempt}/${MAX_RETRIES})`;
+      
+      console.warn(warningMsg);
+      if (typeof window !== "undefined") {
+         window.dispatchEvent(new CustomEvent("toast", { detail: { type: "warning", message: warningMsg } }));
+      }
+
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+};
+
 export function useSorobanRead(fnName, args = [], options = {}) {
   const { publicKey } = useWalletStore();
   const [data, setData] = useState(null);
@@ -61,7 +71,6 @@ export function useSorobanRead(fnName, args = [], options = {}) {
   const [error, setError] = useState(null);
 
   const serializedArgs = serializeArgs(args);
-
   const onSuccessRef = useRef(options.onSuccess);
   const onErrorRef = useRef(options.onError);
 
@@ -75,62 +84,49 @@ export function useSorobanRead(fnName, args = [], options = {}) {
     setLoading(true);
     setError(null);
     try {
-      if (import.meta.env.VITE_MOCK_WALLET === 'true') {
+      if (import.meta.env.VITE_MOCK_WALLET === "true") {
         await new Promise(resolve => setTimeout(resolve, 300));
         let mockVal = 10;
         let mockU64 = null;
-        if (fnName === 'get_shares') {
-          const stored = localStorage.getItem('mock_shares_balance');
+        if (fnName === "get_shares") {
+          const stored = localStorage.getItem("mock_shares_balance");
           mockVal = stored ? parseInt(stored, 10) : 10;
-        } else if (fnName === 'get_available_shares') {
+        } else if (fnName === "get_available_shares") {
           mockVal = 900;
-        } else if (fnName === 'get_total_shares') {
+        } else if (fnName === "get_total_shares") {
           mockVal = 1000;
-        } else if (fnName === 'get_price') {
-          mockU64 = 100_000_000; // 10 XLM in stroops
+        } else if (fnName === "get_price") {
+          mockU64 = 100_000_000;
         }
-        const result = {
-          retval: {
-            u32: () => mockVal,
-            u64: () => mockU64 ?? mockVal,
-          }
-        };
+        const result = { retval: { u32: () => mockVal, u64: () => mockU64 ?? mockVal } };
         setData(result);
-        if (onSuccessRef.current) {
-          onSuccessRef.current(result);
-        }
+        if (onSuccessRef.current) onSuccessRef.current(result);
         return result;
       }
+      
       const account = await server.getAccount(publicKey);
       const tx = new TransactionBuilder(account, {
-        fee: '100',
+        fee: "100",
         networkPassphrase: NETWORK_PASSPHRASE,
       })
         .addOperation(getContract().call(fnName, ...args))
         .setTimeout(30)
         .build();
 
-      const simulation = await server.simulateTransaction(tx);
-      if (simulation.error) {
-        throw new Error(simulation.error);
-      }
+      const simulation = await withRetry(() => server.simulateTransaction(tx), `simulation (${fnName})`);
+      if (simulation.error) throw new Error(simulation.error);
 
       setData(simulation.result);
-      if (onSuccessRef.current) {
-        onSuccessRef.current(simulation.result);
-      }
+      if (onSuccessRef.current) onSuccessRef.current(simulation.result);
       return simulation.result;
     } catch (err) {
       console.error(`[useSorobanRead] Error executing ${fnName}:`, err);
       setError(err.message || `Failed to execute ${fnName}`);
-      if (onErrorRef.current) {
-        onErrorRef.current(err);
-      }
+      if (onErrorRef.current) onErrorRef.current(err);
       throw err;
     } finally {
       setLoading(false);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [publicKey, fnName, serializedArgs]);
 
   useEffect(() => {
@@ -142,13 +138,8 @@ export function useSorobanRead(fnName, args = [], options = {}) {
   return { data, loading, error, refetch: execute };
 }
 
-// Alias for general contract read calls to satisfy task checklist / description
 export const useSorobanCall = useSorobanRead;
 
-/**
- * useSorobanWrite
- * Hook for executing transactions that write state (e.g. buying shares).
- */
 export function useSorobanWrite(fnName) {
   const { publicKey } = useWalletStore();
   const [loading, setLoading] = useState(false);
@@ -156,77 +147,62 @@ export function useSorobanWrite(fnName) {
   const [result, setResult] = useState(null);
 
   const execute = useCallback(async (args = [], options = {}) => {
-    if (!publicKey) {
-      throw new Error('Wallet not connected');
-    }
+    if (!publicKey) throw new Error("Wallet not connected");
     setLoading(true);
     setError(null);
     setResult(null);
 
     try {
-      if (import.meta.env.VITE_MOCK_WALLET === 'true') {
-        await new Promise(resolve => setTimeout(resolve, 800)); // Simulate Freighter signing delay
-        
-        if (fnName === 'buy_shares') {
+      if (import.meta.env.VITE_MOCK_WALLET === "true") {
+        await new Promise(resolve => setTimeout(resolve, 800));
+        if (fnName === "buy_shares") {
           let buyAmount = 1;
-          if (args[1] && typeof args[1].u32 === 'function') {
+          if (args[1] && typeof args[1].u32 === "function") {
             buyAmount = args[1].u32();
           }
-          const stored = localStorage.getItem('mock_shares_balance');
+          const stored = localStorage.getItem("mock_shares_balance");
           const currentShares = stored ? parseInt(stored, 10) : 10;
           const newShares = currentShares + buyAmount;
-          localStorage.setItem('mock_shares_balance', newShares.toString());
-          
+          localStorage.setItem("mock_shares_balance", newShares.toString());
           useWalletStore.getState().setShares(newShares);
         }
-        
-        const submitRes = {
-          hash: 'mock_tx_hash_' + Math.random().toString(36).substring(2, 15)
-        };
+        const submitRes = { hash: "mock_tx_hash_" + Math.random().toString(36).substring(2, 15) };
         setResult(submitRes);
-        if (options.onSuccess) {
-          options.onSuccess(submitRes);
-        }
+        if (options.onSuccess) options.onSuccess(submitRes);
         return submitRes;
       }
-      const account = await server.getAccount(publicKey);
+      
+      const account = await withRetry(() => server.getAccount(publicKey), "fetch account");
       let tx = new TransactionBuilder(account, {
-        fee: options.fee || '10000',
+        fee: options.fee || "10000",
         networkPassphrase: NETWORK_PASSPHRASE,
       })
         .addOperation(getContract().call(fnName, ...args))
         .setTimeout(30)
         .build();
 
-      const simulation = await server.simulateTransaction(tx);
-      if (simulation.error) {
-        throw new Error(simulation.error);
-      }
+      const simulation = await withRetry(() => server.simulateTransaction(tx), `simulation (${fnName})`);
+      if (simulation.error) throw new Error(simulation.error);
 
       tx = rpc.assembleTransaction(tx, simulation).build();
-      const { signedTxXdr, error: signError } = await signTransaction(tx.toXDR(), {
-        networkPassphrase: NETWORK_PASSPHRASE,
-      });
+      const { signedTxXdr, error: signError } = await signTransaction(tx.toXDR(), { networkPassphrase: NETWORK_PASSPHRASE });
 
       if (signError || !signedTxXdr) {
-        throw new Error(signError?.message || 'Freighter transaction signing failed');
+        throw new Error(signError?.message || "Freighter transaction signing failed");
       }
 
-      const submitRes = await server.sendTransaction(
-        TransactionBuilder.fromXDR(signedTxXdr, NETWORK_PASSPHRASE)
+      const submitRes = await withRetry(
+        () => server.sendTransaction(TransactionBuilder.fromXDR(signedTxXdr, NETWORK_PASSPHRASE)),
+        `submission (${fnName})`
       );
 
       setResult(submitRes);
-      if (options.onSuccess) {
-        options.onSuccess(submitRes);
-      }
+      if (options.onSuccess) options.onSuccess(submitRes);
       return submitRes;
     } catch (err) {
       console.error(`[useSorobanWrite] Error executing tx ${fnName}:`, err);
       setError(err.message || `Transaction ${fnName} failed`);
-      if (options.onError) {
-        options.onError(err);
-      }
+      if (options.onError) options.onError(err);
       throw err;
     } finally {
       setLoading(false);
@@ -236,5 +212,4 @@ export function useSorobanWrite(fnName) {
   return { execute, loading, error, result, setError, setResult };
 }
 
-// Alias for general contract write calls to satisfy task checklist / description
 export const useSorobanTx = useSorobanWrite;
