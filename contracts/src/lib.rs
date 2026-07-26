@@ -1697,7 +1697,7 @@ impl RwaMarketplace {
     }
 
     /// Get circuit breaker trigger count.
-    pub fn get_circuit_breaker_trigger_count(env: Env) -> u32 {
+    pub fn get_cb_trigger_count(env: Env) -> u32 {
         env.storage()
             .instance()
             .get::<DataKey, u32>(&DataKey::CircuitBreakerTriggerCount)
