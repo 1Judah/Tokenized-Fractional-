@@ -31,7 +31,7 @@
   --warning-text: #fbbf24;
 
   /* Typography */
-  --font-sans: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-sans: 'Outfit', 'Outfit-fallback', 'Inter', 'Inter-fallback', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   
   --font-size-xs: 0.75rem;
   --font-size-sm: 0.875rem;

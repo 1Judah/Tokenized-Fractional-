@@ -1,15 +1,13 @@
-// Copyright (c) 2026 Tokenized Fractional RWA Marketplace Contributors
-// SPDX-License-Identifier: MIT
+import { apiCacheService } from './apiCacheService.js';
 
 const API_BASE = '/api/v1/webhooks';
 
 export const webhookService = {
   async fetchWebhooks(apiKey = '') {
-    const res = await fetch(`${API_BASE}`, {
+    return apiCacheService.fetchWithCache(API_BASE, {
       headers: { 'x-api-key': apiKey },
+      ttl: 2 * 60 * 1000,
     });
-    if (!res.ok) throw new Error('Failed to fetch webhooks');
-    return res.json();
   },
 
   async registerWebhook(data, apiKey = '') {
@@ -25,6 +23,7 @@ export const webhookService = {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || 'Failed to register webhook');
     }
+    apiCacheService.invalidate('/api/v1/webhooks');
     return res.json();
   },
 
@@ -38,6 +37,7 @@ export const webhookService = {
       body: JSON.stringify(data),
     });
     if (!res.ok) throw new Error('Failed to update webhook');
+    apiCacheService.invalidate('/api/v1/webhooks');
     return res.json();
   },
 
@@ -47,6 +47,7 @@ export const webhookService = {
       headers: { 'x-api-key': apiKey },
     });
     if (!res.ok) throw new Error('Failed to delete webhook');
+    apiCacheService.invalidate('/api/v1/webhooks');
     return res.json();
   },
 
@@ -56,15 +57,15 @@ export const webhookService = {
       headers: { 'x-api-key': apiKey },
     });
     if (!res.ok) throw new Error('Failed to test webhook');
+    apiCacheService.invalidate('/api/v1/webhooks');
     return res.json();
   },
 
   async fetchDeliveries(id, apiKey = '') {
-    const res = await fetch(`${API_BASE}/${id}/deliveries`, {
+    return apiCacheService.fetchWithCache(`${API_BASE}/${id}/deliveries`, {
       headers: { 'x-api-key': apiKey },
+      ttl: 30 * 1000,
     });
-    if (!res.ok) throw new Error('Failed to fetch deliveries');
-    return res.json();
   },
 
   async replayDelivery(deliveryId, apiKey = '') {
@@ -73,14 +74,14 @@ export const webhookService = {
       headers: { 'x-api-key': apiKey },
     });
     if (!res.ok) throw new Error('Failed to replay delivery');
+    apiCacheService.invalidate('/api/v1/webhooks');
     return res.json();
   },
 
   async fetchAnalytics(apiKey = '') {
-    const res = await fetch(`${API_BASE}/analytics`, {
+    return apiCacheService.fetchWithCache(`${API_BASE}/analytics`, {
       headers: { 'x-api-key': apiKey },
+      ttl: 60 * 1000,
     });
-    if (!res.ok) throw new Error('Failed to fetch analytics');
-    return res.json();
   },
 };
