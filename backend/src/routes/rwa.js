@@ -61,6 +61,30 @@ const NEWS_STORAGE = [
 ];
 
 // ── GET /rwa/export ───────────────────────────────────────────────────────────
+/**
+ * @openapi
+ * /api/v1/rwa/export:
+ *   get:
+ *     tags: [Assets]
+ *     summary: Export assets
+ *     description: Export all assets in JSON or CSV format with optional date range filtering. Admin only.
+ *     security: [{ ApiKeyAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: format
+ *         schema: { type: string, enum: [json, csv], default: json }
+ *       - in: query
+ *         name: from
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: to
+ *         schema: { type: string, format: date }
+ *     responses:
+ *       200:
+ *         description: Exported data
+ *       401:
+ *         description: Unauthorized
+ */
 v1.get('/rwa/export', adminAuth, (req, res) => {
   const { format = 'json', from, to } = req.query;
 
@@ -96,6 +120,49 @@ v1.get('/rwa/export', adminAuth, (req, res) => {
 });
 
 // ── GET /rwa ──────────────────────────────────────────────────────────────────
+/**
+ * @openapi
+ * /api/v1/rwa:
+ *   get:
+ *     tags: [Assets]
+ *     summary: List all RWA assets
+ *     description: Retrieve all approved real-world asset metadata with optional pagination and filtering.
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 50 }
+ *         description: Maximum number of assets to return
+ *       - in: query
+ *         name: offset
+ *         schema: { type: integer, default: 0 }
+ *         description: Number of assets to skip (for pagination)
+ *       - in: query
+ *         name: search
+ *         schema: { type: string }
+ *         description: Full-text search across title, location, description
+ *       - in: query
+ *         name: assetType
+ *         schema: { type: string }
+ *         description: Filter by asset type
+ *     responses:
+ *       200:
+ *         description: List of assets
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items: { $ref: '#/components/schemas/Asset' }
+ *             example:
+ *               - contractId: "CABC123..."
+ *                 title: "Luxury Apartment"
+ *                 location: "New York, USA"
+ *                 assetType: "real_estate"
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/Error' }
+ */
 v1.get('/rwa', (req, res) => {
   const data = loadData();
   let assets = Object.entries(data)
@@ -138,6 +205,36 @@ v1.get('/rwa', (req, res) => {
 });
 
 // ── GET /rwa/search ───────────────────────────────────────────────────────────
+/**
+ * @openapi
+ * /api/v1/rwa/search:
+ *   get:
+ *     tags: [Assets]
+ *     summary: Search assets
+ *     description: Full-text search across asset metadata with relevance scoring.
+ *     parameters:
+ *       - in: query
+ *         name: q
+ *         required: true
+ *         schema: { type: string }
+ *         description: Search query
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 20 }
+ *     responses:
+ *       200:
+ *         description: Search results
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items: { $ref: '#/components/schemas/Asset' }
+ *       400:
+ *         description: Missing query parameter
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/Error' }
+ */
 v1.get('/rwa/search', (req, res) => {
   const { q, assetType, location, page, limit } = req.query;
   if (!q || !String(q).trim()) {
@@ -188,6 +285,25 @@ v1.get('/rwa/search', (req, res) => {
 });
 
 // ── GET /rwa/pending ──────────────────────────────────────────────────────────
+/**
+ * @openapi
+ * /api/v1/rwa/pending:
+ *   get:
+ *     tags: [Assets]
+ *     summary: List pending assets
+ *     description: Get all assets with pending verification status. Admin only.
+ *     security: [{ ApiKeyAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: List of pending assets
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items: { $ref: '#/components/schemas/Asset' }
+ *       401:
+ *         description: Unauthorized
+ */
 v1.get('/rwa/pending', adminAuth, (req, res) => {
   const data = loadData();
   const pending = Object.entries(data)
@@ -197,6 +313,31 @@ v1.get('/rwa/pending', adminAuth, (req, res) => {
 });
 
 // ── GET /rwa/:contractId ──────────────────────────────────────────────────────
+/**
+ * @openapi
+ * /api/v1/rwa/{contractId}:
+ *   get:
+ *     tags: [Assets]
+ *     summary: Get asset by contract ID
+ *     description: Retrieve a single asset's metadata by its Soroban contract ID.
+ *     parameters:
+ *       - in: path
+ *         name: contractId
+ *         required: true
+ *         schema: { type: string }
+ *         description: Soroban contract ID (starts with C)
+ *     responses:
+ *       200:
+ *         description: Asset details
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/Asset' }
+ *       404:
+ *         description: Asset not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/Error' }
+ */
 v1.get('/rwa/:contractId', async (req, res) => {
   const { contractId } = req.params;
 
@@ -215,6 +356,42 @@ v1.get('/rwa/:contractId', async (req, res) => {
 });
 
 // ── POST /rwa ─────────────────────────────────────────────────────────────────
+/**
+ * @openapi
+ * /api/v1/rwa:
+ *   post:
+ *     tags: [Assets]
+ *     summary: Create or update an asset
+ *     description: Create a new RWA asset or update an existing one by contract ID. Admin only.
+ *     security: [{ ApiKeyAuth: [] }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema: { $ref: '#/components/schemas/AssetInput' }
+ *           example:
+ *             contractId: "CABC123DEF..."
+ *             title: "Luxury Apartment Complex"
+ *             location: "New York, USA"
+ *             description: "A premium residential property"
+ *             assetType: "real_estate"
+ *     responses:
+ *       201:
+ *         description: Asset created/updated
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/Asset' }
+ *       400:
+ *         description: Validation error
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/Error' }
+ *       401:
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/Error' }
+ */
 v1.post('/rwa', adminAuth, writeLimiter, async (req, res) => {
   const { contractId, ...metadata } = req.body;
 
@@ -252,6 +429,40 @@ v1.post('/rwa', adminAuth, writeLimiter, async (req, res) => {
 });
 
 // ── DELETE /rwa/:contractId ───────────────────────────────────────────────────
+/**
+ * @openapi
+ * /api/v1/rwa/{contractId}:
+ *   delete:
+ *     tags: [Assets]
+ *     summary: Delete an asset
+ *     description: Permanently delete an RWA asset by contract ID. Admin only.
+ *     security: [{ ApiKeyAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: contractId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Asset deleted
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message: { type: string }
+ *                 contractId: { type: string }
+ *       401:
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/Error' }
+ *       404:
+ *         description: Asset not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/Error' }
+ */
 v1.delete('/rwa/:contractId', adminAuth, writeLimiter, async (req, res) => {
   const { contractId } = req.params;
   const data = loadData();
@@ -284,6 +495,35 @@ v1.delete('/rwa/:contractId', adminAuth, writeLimiter, async (req, res) => {
 });
 
 // ── PATCH /rwa/:contractId ────────────────────────────────────────────────────
+/**
+ * @openapi
+ * /api/v1/rwa/{contractId}:
+ *   patch:
+ *     tags: [Assets]
+ *     summary: Update an asset
+ *     description: Partially update an existing RWA asset. Admin only.
+ *     security: [{ ApiKeyAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: contractId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema: { $ref: '#/components/schemas/AssetInput' }
+ *     responses:
+ *       200:
+ *         description: Asset updated
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/Asset' }
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: Asset not found
+ */
 v1.patch('/rwa/:contractId', adminAuth, writeLimiter, async (req, res) => {
   const { contractId } = req.params;
   const patch = req.body;
@@ -408,6 +648,29 @@ v1.post('/rwa/:contractId/reject', adminAuth, writeLimiter, async (req, res) => 
 });
 
 // ── GET /news ─────────────────────────────────────────────────────────────────
+/**
+ * @openapi
+ * /api/v1/news:
+ *   get:
+ *     tags: [News]
+ *     summary: Get platform news
+ *     description: Retrieve the latest platform announcements and news items.
+ *     responses:
+ *       200:
+ *         description: List of news items
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   id: { type: string }
+ *                   title: { type: string }
+ *                   summary: { type: string }
+ *                   date: { type: string, format: date-time }
+ *                   link: { type: string }
+ */
 v1.get('/news', (_req, res) => {
   res.json(NEWS_STORAGE);
 });
