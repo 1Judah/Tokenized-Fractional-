@@ -48,3 +48,38 @@
     flex-direction: column;
   }
 }
+
+/* ── Issue #299: Form validation styles ───────────────────────────────────── */
+.fieldError {
+  position: relative;
+}
+
+.fieldError > input,
+.fieldError [class*="input"] {
+  border-color: var(--color-error, #ef4444) !important;
+  box-shadow: 0 0 0 1px var(--color-error, #ef4444);
+}
+
+.fieldValid > input,
+.fieldValid [class*="input"] {
+  border-color: var(--color-success, #22c55e) !important;
+}
+
+.fieldErrorText {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--color-error, #ef4444);
+  font-weight: 500;
+}
+
+.fieldHelp {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--color-text-muted, #9ca3af);
+}
+
+.fieldHelp::before {
+  content: "";
+}

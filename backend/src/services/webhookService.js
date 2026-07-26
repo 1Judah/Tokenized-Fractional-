@@ -321,3 +321,12 @@ class WebhookService {
 }
 
 export const createWebhookService = (logger) => new WebhookService(logger);
+
+/**
+ * Fire webhooks for a given event. Convenience function that
+ * creates a temporary service instance and dispatches the event.
+ */
+export const fireWebhooks = async (eventType, eventData, logger = console) => {
+  const service = createWebhookService(logger);
+  return service.dispatchEvent(eventType, eventData);
+};

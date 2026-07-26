@@ -53,3 +53,9 @@
   max-width: 320px;
   line-height: 1.5;
 }
+
+.virtualContainer {
+  width: 100%;
+  border-radius: var(--radius-sm, 0.5rem);
+  overflow: hidden;
+}
