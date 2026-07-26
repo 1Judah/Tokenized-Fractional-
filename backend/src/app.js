@@ -26,6 +26,8 @@ import { logger } from './services/logger.js';
 import { apiLimiter } from './middleware/rateLimiter.js';
 import { createAdminAuth, adminAuth as legacyAdminAuth } from './middleware/auth.js';
 import { createTieredRateLimiter, initializeRedisLimiter, closeRedisLimiter, extractWalletMiddleware } from './middleware/tieredRateLimiter.js';
+import { createEndpointRateLimiter, initializeEndpointLimiter, closeEndpointLimiter } from './middleware/endpointRateLimiter.js';
+import { createIPAccessControl, initializeIPAccessControl, closeIPAccessControl, addToWhitelist, removeFromWhitelist, addToBlacklist, removeFromBlacklist, setWhitelistEnabled, getWhitelist, getBlacklist, isWhitelistEnabled } from './middleware/ipAccessControl.js';
 import { v1 } from './routes/rwa.js';
 import { swaggerSpec } from '../docs.js';
 import { initDatabase, getDatabase } from './services/database.js';
@@ -44,6 +46,7 @@ import { createFlashLoanProtectionService } from './services/flashLoanProtection
 import { createFlashLoanProtectionRoutes } from './routes/flashLoanProtection.js';
 import { createGraphQLPlaygroundSecurityMiddleware } from '../graphql.js';
 import { createApiMonitoringRoutes } from './routes/apiMonitoring.js';
+import { createIPAccessRoutes } from './routes/ipAccess.js';
 import { requestLogger } from './middleware/requestLogger.js';
 import { stitchingMetrics, getSchemaVersion, stitchingConfig } from '../graphql-stitching.js';
 
@@ -87,6 +90,7 @@ let webhookService = null;
 let webhookRoutes = null;
 let flashLoanProtectionService = null;
 let flashLoanProtectionRoutes = null;
+let ipAccessRoutes = null;
 
 /**
  * Initialize the app with database services.
@@ -101,6 +105,21 @@ export async function initializeApp() {
     } else if (REDIS_URL) {
       logger.warn('Redis configured but not available, using memory-based rate limiting');
     }
+
+    // Initialize endpoint-specific rate limiting
+    const endpointLimiterInitialized = await initializeEndpointLimiter();
+    if (endpointLimiterInitialized) {
+      logger.info('Endpoint rate limiter initialized');
+    }
+
+    // Initialize IP access control
+    const ipControlInitialized = await initializeIPAccessControl();
+    if (ipControlInitialized) {
+      logger.info('IP access control initialized');
+    }
+
+    // Create IP access control routes
+    ipAccessRoutes = createIPAccessRoutes(logger, adminAuth);
 
     // Initialize database
     const db = await initDatabase(NODE_ENV);
@@ -190,6 +209,13 @@ app.use('/api/', (req, res, next) => {
   }
   next();
 });
+
+// IP Access Control (whitelist/blacklist)
+app.use('/api/', createIPAccessControl());
+
+// Endpoint-specific rate limiting (granular per-endpoint limits)
+app.use('/api/', createEndpointRateLimiter());
+app.use('/graphql', createEndpointRateLimiter());
 
 // Prometheus metrics
 app.use(metricsMiddleware);
@@ -390,6 +416,21 @@ const apiMonitoringRoutes = createApiMonitoringRoutes();
 app.use('/api/v1/api-monitor', apiMonitoringRoutes);
 app.use('/api/api-monitor', apiMonitoringRoutes);
 
+// Mount IP Access Control routes (admin only)
+app.use('/api/v1/ip-access', (req, res, next) => {
+  if (!ipAccessRoutes) {
+    return res.status(503).json({ error: 'IP access control service not initialized', code: 'SERVICE_UNAVAILABLE' });
+  }
+  adminAuth(req, res, () => ipAccessRoutes(req, res, next));
+});
+
+app.use('/api/ip-access', (req, res, next) => {
+  if (!ipAccessRoutes) {
+    return res.status(503).json({ error: 'IP access control service not initialized', code: 'SERVICE_UNAVAILABLE' });
+  }
+  adminAuth(req, res, () => ipAccessRoutes(req, res, next));
+});
+
 // Mount GraphQL Security Middleware
 app.use('/graphql', createGraphQLPlaygroundSecurityMiddleware());
 
@@ -451,4 +492,6 @@ app.use((err, req, res, _next) => {
  */
 export async function closeApp() {
   await closeRedisLimiter();
+  await closeEndpointLimiter();
+  await closeIPAccessControl();
 }
