@@ -38,6 +38,8 @@
   },
   "dependencies": {
     "@apollo/server": "^4.10.1",
+    "@apollo/gateway": "^2.7.0",
+    "@apollo/subgraph": "^2.7.0",
     "@sentry/node": "^10.60.0",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^11.10.0",

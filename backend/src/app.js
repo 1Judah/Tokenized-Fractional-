@@ -35,6 +35,8 @@ import { createTransactionService } from './services/transactionService.js';
 import { createAnalyticsRoutes } from './routes/analytics.js';
 import { createPurchaseRoutes } from './routes/purchases.js';
 import { createRateLimitingRoutes } from './routes/rateLimiting.js';
+import { createFederatedGraphQLServer } from './federation/gateway.js';
+import * as dataService from './services/dataService.js';
 import { partialResponseMiddleware } from './middleware/partialResponse.js';
 import { createWebhookService } from './services/webhookService.js';
 import { createWebhookRoutes } from './routes/webhooks.js';
@@ -125,15 +127,16 @@ export async function initializeApp() {
     // Setup rate limiting routes
     rateLimitingRoutes = createRateLimitingRoutes(logger, adminAuth);
 
-    // Setup Webhook service and routes
-    webhookService = createWebhookService(logger);
-    webhookRoutes = createWebhookRoutes(webhookService, logger, adminAuth);
+    // Initialize GraphQL Federation Gateway
+    const federatedGraphQL = await createFederatedGraphQLServer({
+      dataLayer: dataService,
+      transactionService,
+      logger,
+    });
+    app.use('/graphql', federatedGraphQL.middleware);
+    logger.info('GraphQL Federation gateway initialized at /graphql');
 
-    // Setup Flash Loan Protection service and routes
-    flashLoanProtectionService = createFlashLoanProtectionService(logger);
-    flashLoanProtectionRoutes = createFlashLoanProtectionRoutes(flashLoanProtectionService, adminAuth);
-
-    return { db, apiKeyService, transactionService, webhookService, flashLoanProtectionService };
+    return { db, apiKeyService, transactionService, federatedGraphQL };
   } catch (error) {
     logger.error({ error: error.message }, 'Failed to initialize app');
     throw error;
