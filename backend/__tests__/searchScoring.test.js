@@ -270,9 +270,9 @@ describe('scoreSearch — empty query', () => {
   });
 });
 
-// ── scoreSearch: Partial Matches ──────────────────────────────────────────────
+// ── scoreSearch: Token-Based Matching ─────────────────────────────────────────
 
-describe('scoreSearch — partial / prefix matching', () => {
+describe('scoreSearch — token-based matching', () => {
   test('search term matches substrings within tokens via tokenization', () => {
     // The tokenize function splits on word boundaries, so a search for "lux"
     // would match a token "luxury" only if "lux" is a standalone word.
@@ -306,7 +306,7 @@ describe('scoreSearch — partial / prefix matching', () => {
     expect(partialResult.length).toBe(0);
   });
 
-  test('multi-word queries with partial matches score relevant documents', () => {
+  test('single-word query correctly scores the matching document', () => {
     const data = {
       c1: {
         title: 'Luxury Beach House',
