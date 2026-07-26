@@ -25,7 +25,8 @@ import styles from './OptimizedImage.module.css';
  * @returns {string} SVG data URI
  */
 function makeBlurPlaceholder(color = '#1a1a2e') {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="30" viewBox="0 0 40 30"><rect width="40" height="30" fill="${encodeURIComponent(color)}"/></svg>`;
+  // 10×10 pixel placeholder upscaled via CSS (per Issue #375)
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10"><rect width="10" height="10" fill="${encodeURIComponent(color)}"/></svg>`;
   return `data:image/svg+xml;base64,${btoa(svg)}`;
 }
 
