@@ -28,6 +28,7 @@ import { expressMiddleware } from '@apollo/server/express4';
 import { typeDefs, createResolvers } from './graphql.js';
 import { initializeGraphQLSubscriptions } from './graphql-ws-adapter.js';
 import { withCdnAssetUrls } from './cdn.js';
+import { createBatchHandler } from './src/middleware/batchHandler.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // multer memoryStorage keeps the file in memory as a Buffer (req.file.buffer).
@@ -1591,6 +1592,11 @@ v1.get('/ws/stats', (req, res) => {
 // Mount versioned router and backward-compatible aliases
 app.use('/api/v1', v1);
 app.use('/api', v1); // legacy /api/rwa aliased to /api/v1/rwa
+
+// ── Batch API endpoint — multiple operations in a single request (#256) ──────
+const batchHandler = createBatchHandler(app, { logger });
+app.post('/api/batch', batchHandler);
+app.post('/api/v1/batch', batchHandler);
 
 app.use((_req, res) => {
   res.status(404).json({ error: 'Not found', requestId: _req.requestId });
