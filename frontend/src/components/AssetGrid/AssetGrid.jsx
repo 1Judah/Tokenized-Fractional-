@@ -1,21 +1,15 @@
-import React, { memo } from 'react';
+import React, { memo, useMemo } from 'react';
 import AssetCard from '../AssetCard/AssetCard';
 import AssetCardSkeleton from '../Skeleton/AssetCardSkeleton';
+import VirtualList from '../VirtualList/VirtualList';
 import Card from '../Card/Card';
 import EmptyState from '../EmptyState/EmptyState';
 import { FAILED_TO_LOAD_ASSETS } from '../../constants/errors';
 import styles from './AssetGrid.module.css';
 
-/**
- * AssetGrid — responsive grid of AssetCards.
- *
- * @param {Array}    assets       - Array of asset metadata objects
- * @param {boolean}  loading      - Is data being fetched?
- * @param {string}   error        - Error message if fetch failed
- * @param {boolean}  isEmpty      - True when fetch succeeded but returned 0 assets
- */
+const ITEM_HEIGHT = 340;
+
 function AssetGrid({ assets = [], loading = false, error = null, isEmpty = false }) {
-  // ── Loading state ──────────────────────────────────────────────────────
   if (loading) {
     return (
       <div className={styles.grid}>
@@ -26,7 +20,6 @@ function AssetGrid({ assets = [], loading = false, error = null, isEmpty = false
     );
   }
 
-  // ── Error state ────────────────────────────────────────────────────────
   if (error) {
     return (
       <EmptyState
@@ -38,7 +31,6 @@ function AssetGrid({ assets = [], loading = false, error = null, isEmpty = false
     );
   }
 
-  // ── Empty state ────────────────────────────────────────────────────────
   if (isEmpty || assets.length === 0) {
     return (
       <EmptyState
@@ -52,12 +44,30 @@ function AssetGrid({ assets = [], loading = false, error = null, isEmpty = false
     );
   }
 
-  // ── Normal state ───────────────────────────────────────────────────────
+  if (assets.length < 20) {
+    return (
+      <div className={styles.grid}>
+        {assets.map((asset) => (
+          <AssetCard key={asset.contractId} asset={asset} />
+        ))}
+      </div>
+    );
+  }
+
   return (
-    <div className={styles.grid}>
-      {assets.map((asset) => (
-        <AssetCard key={asset.contractId} asset={asset} />
-      ))}
+    <div className={styles.virtualContainer}>
+      <VirtualList
+        items={assets}
+        itemHeight={ITEM_HEIGHT}
+        height={Math.min(assets.length * ITEM_HEIGHT, 800)}
+        overscan={3}
+        keyExtractor={(item) => item.contractId}
+        renderItem={({ item }) => (
+          <div className={styles.virtualItem}>
+            <AssetCard asset={item} />
+          </div>
+        )}
+      />
     </div>
   );
 }

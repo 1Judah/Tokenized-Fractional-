@@ -1,6 +1,3 @@
-/* OfflineIndicator.module.css */
-
-/* Shared base — sits at the top of the viewport, full width */
 .offline,
 .reconnected {
   position: fixed;
@@ -8,29 +5,67 @@
   left: 0;
   right: 0;
   z-index: 9999;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  padding: 0.5rem 1rem;
   font-size: var(--font-size-sm, 0.875rem);
   font-weight: var(--font-weight-medium, 500);
   animation: slideDown 0.25s ease;
 }
 
 .offline {
-  background: #f59e0b;   /* amber */
+  background: #f59e0b;
   color: #1c1917;
 }
 
 .reconnected {
-  background: #22c55e;   /* green */
+  background: #22c55e;
   color: #052e16;
   animation: slideDown 0.25s ease, fadeOut 0.5s ease 2.5s forwards;
 }
 
+.bannerContent {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+}
+
 .icon {
   flex-shrink: 0;
+}
+
+.offlineLabel {
+  font-weight: var(--font-weight-bold, 700);
+}
+
+.offlineDesc {
+  opacity: 0.85;
+}
+
+.syncInfo,
+.queueInfo {
+  font-size: 0.75rem;
+  opacity: 0.85;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.dismissBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: rgba(0, 0, 0, 0.1);
+  color: inherit;
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 3px;
+  margin-left: 0.5rem;
+  transition: background 0.15s;
+}
+
+.dismissBtn:hover {
+  background: rgba(0, 0, 0, 0.2);
 }
 
 @keyframes slideDown {

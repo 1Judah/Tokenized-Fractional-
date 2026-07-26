@@ -12,16 +12,9 @@
  */
 
 import { clientsClaim } from 'workbox-core';
-import {
-  precacheAndRoute,
-  createHandlerBoundToURL,
-} from 'workbox-precaching';
+import { precacheAndRoute, createHandlerBoundToURL } from 'workbox-precaching';
 import { registerRoute, NavigationRoute } from 'workbox-routing';
-import {
-  CacheFirst,
-  StaleWhileRevalidate,
-  NetworkFirst,
-} from 'workbox-strategies';
+import { CacheFirst, StaleWhileRevalidate, NetworkFirst } from 'workbox-strategies';
 import { ExpirationPlugin } from 'workbox-expiration';
 import { BackgroundSyncPlugin } from 'workbox-background-sync';
 import { CacheableResponsePlugin } from 'workbox-cacheable-response';
@@ -63,14 +56,13 @@ registerRoute(
         purgeOnQuotaError: true,
       }),
     ],
-  })
+  }),
 );
 
 // ── Google Fonts — CacheFirst ─────────────────────────────────────────────────
 registerRoute(
   ({ url }) =>
-    url.origin === 'https://fonts.googleapis.com' ||
-    url.origin === 'https://fonts.gstatic.com',
+    url.origin === 'https://fonts.googleapis.com' || url.origin === 'https://fonts.gstatic.com',
   new CacheFirst({
     cacheName: 'google-fonts-v1',
     plugins: [
@@ -80,7 +72,7 @@ registerRoute(
         maxAgeSeconds: 365 * 24 * 60 * 60, // 1 year
       }),
     ],
-  })
+  }),
 );
 
 // ── API: RWA asset list — StaleWhileRevalidate ────────────────────────────────
@@ -98,7 +90,7 @@ registerRoute(
         purgeOnQuotaError: true,
       }),
     ],
-  })
+  }),
 );
 
 // ── API: health and news — NetworkFirst ───────────────────────────────────────
@@ -115,7 +107,7 @@ registerRoute(
       new CacheableResponsePlugin({ statuses: [200] }),
       new ExpirationPlugin({ maxEntries: 20, maxAgeSeconds: 10 * 60 }),
     ],
-  })
+  }),
 );
 
 // ── Background Sync — queue failed POST/PATCH/DELETE ─────────────────────────
@@ -127,15 +119,88 @@ const bgSyncPlugin = new BackgroundSyncPlugin('admin-writes-queue', {
 
 registerRoute(
   ({ url, request }) =>
-    url.pathname.startsWith('/api/') &&
-    ['POST', 'PATCH', 'DELETE'].includes(request.method),
+    url.pathname.startsWith('/api/') && ['POST', 'PATCH', 'DELETE'].includes(request.method),
   new NetworkFirst({
     cacheName: 'admin-writes-v1',
     plugins: [bgSyncPlugin],
     fetchOptions: { credentials: 'same-origin' },
   }),
-  'POST'
+  'POST',
 );
+
+// ── Soroban RPC transactions — queue for background sync when offline (Issue #425) ──
+registerRoute(
+  ({ url }) => url.href.includes('soroban') || url.href.includes('stellar.org'),
+  new NetworkFirst({
+    cacheName: 'soroban-rpc-v1',
+    networkTimeoutSeconds: 10,
+    plugins: [
+      new CacheableResponsePlugin({ statuses: [200] }),
+      new ExpirationPlugin({ maxEntries: 50, maxAgeSeconds: 60 * 60 }),
+    ],
+  }),
+);
+
+// ── IndexedDB-based transaction queue for failed writes (Issue #425) ──────────
+// Enhanced: intercept failed Soroban transactions and queue them
+self.addEventListener('fetch', (event) => {
+  if (event.request.method !== 'POST' && event.request.method !== 'PUT') return;
+  if (!event.request.url.includes('/api/') && !event.request.url.includes('soroban')) return;
+
+  const clonedRequest = event.request.clone();
+  event.respondWith(
+    (async () => {
+      try {
+        const response = await fetch(clonedRequest);
+        if (!response.ok && !navigator.onLine) {
+          throw new Error('Offline');
+        }
+        return response;
+      } catch (err) {
+        const body = await clonedRequest
+          .clone()
+          .text()
+          .catch(() => '');
+        const db = await openIndexedDBForSW();
+        await saveToDB(db, 'failed-transactions', {
+          url: clonedRequest.url,
+          method: clonedRequest.method,
+          headers: [...clonedRequest.headers.entries()],
+          body,
+          timestamp: Date.now(),
+        });
+        return new Response(JSON.stringify({ queued: true, error: 'Request queued for retry' }), {
+          status: 202,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+    })(),
+  );
+});
+
+function openIndexedDBForSW() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('sw-failed-tx-queue', 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains('failed-transactions')) {
+        db.createObjectStore('failed-transactions', { keyPath: 'id', autoIncrement: true });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function saveToDB(db, store, data) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, 'readwrite');
+    const req = tx.objectStore(store).add(data);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+    tx.oncomplete = () => db.close();
+  });
+}
 
 // ── Push notifications (placeholder) ─────────────────────────────────────────
 self.addEventListener('push', (event) => {
@@ -154,7 +219,6 @@ self.addEventListener('message', (event) => {
     self.skipWaiting();
   }
 });
-
 
 // ── Issue #308: Enhanced PWA Service Worker ─────────────────────────────────────
 // Cache versioning + invalidation strategy
@@ -181,11 +245,11 @@ self.addEventListener('activate', (event) => {
           .map((key) => {
             console.log('[SW] Deleting old cache:', key);
             return caches.delete(key);
-          })
+          }),
       );
       // Claim all clients immediately
       await self.clients.claim();
-    })()
+    })(),
   );
 });
 
@@ -202,7 +266,7 @@ registerRoute(
         purgeOnQuotaError: true,
       }),
     ],
-  })
+  }),
 );
 
 // ── Periodic Background Sync for data updates ─────────────────────────────────
@@ -228,7 +292,7 @@ async function refreshMarketplaceData() {
         } catch {
           // Network failed — keep stale data
         }
-      })
+      }),
     );
   } catch (err) {
     console.error('[SW] Periodic sync failed:', err);
@@ -307,10 +371,46 @@ function deleteFromDB(db, store, id) {
   });
 }
 
+// ── GraphQL / API query caching from IndexedDB-backed store (Issue #425) ───────
+// Cache GraphQL portfolio queries for offline access
+const GRAPHQL_CACHE_NAME = 'graphql-queries-v1';
+
+registerRoute(
+  ({ url }) => url.pathname.includes('/graphql') || url.pathname.includes('/api/v1/rwa'),
+  new NetworkFirst({
+    cacheName: GRAPHQL_CACHE_NAME,
+    networkTimeoutSeconds: 5,
+    plugins: [
+      new CacheableResponsePlugin({ statuses: [200] }),
+      new ExpirationPlugin({
+        maxEntries: 100,
+        maxAgeSeconds: 30 * 60,
+        purgeOnQuotaError: true,
+      }),
+    ],
+  }),
+);
+
 // ── Cache management: respond to messages from the app ────────────────────────
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
     self.skipWaiting();
+  }
+
+  if (event.data && event.data.type === 'CACHE_UPDATED') {
+    const { key, data } = event.data.payload || {};
+    if (key && data) {
+      const cacheKey = `api-cache-${key}`;
+      event.waitUntil(
+        (async () => {
+          const cache = await caches.open(GRAPHQL_CACHE_NAME);
+          const response = new Response(JSON.stringify(data), {
+            headers: { 'Content-Type': 'application/json', 'X-Cache-Updated': 'true' },
+          });
+          await cache.put(cacheKey, response);
+        })(),
+      );
+    }
   }
 
   if (event.data && event.data.type === 'CLEAR_CACHES') {
@@ -320,7 +420,7 @@ self.addEventListener('message', (event) => {
         await Promise.all(cacheKeys.map((key) => caches.delete(key)));
         // Notify the app that caches were cleared
         event.source?.postMessage({ type: 'CACHES_CLEARED' });
-      })()
+      })(),
     );
   }
 
@@ -346,7 +446,7 @@ self.addEventListener('message', (event) => {
           sizeMB: (totalSize / (1024 * 1024)).toFixed(2),
           cacheCount: cacheKeys.length,
         });
-      })()
+      })(),
     );
   }
 
@@ -372,6 +472,6 @@ self.addEventListener('notificationclick', (event) => {
         return clientList[0].focus();
       }
       return self.clients.openWindow('/');
-    })
+    }),
   );
 });

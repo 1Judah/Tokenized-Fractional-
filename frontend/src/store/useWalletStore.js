@@ -2,6 +2,12 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { isAllowed, setAllowed, getUserInfo } from '@stellar/freighter-api';
 
+const FALLBACK_PROVIDER = {
+  uuid: 'freighter-builtin',
+  name: 'Freighter',
+  rdns: 'app.freighter',
+};
+
 export const useWalletStore = create(
   persist(
     (set, get) => ({
@@ -9,8 +15,42 @@ export const useWalletStore = create(
       isConnecting: false,
       walletError: null,
       shares: 0,
+      activeProvider: null,
+      availableProviders: [],
 
       isConnected: () => Boolean(get().publicKey),
+
+      setAvailableProviders: (providers) => set({ availableProviders: providers }),
+
+      connectWithProvider: async (provider) => {
+        set({ isConnecting: true, walletError: null, activeProvider: provider });
+        try {
+          if (provider?.rdns?.includes('freighter') || provider?.name?.toLowerCase().includes('freighter') || !provider) {
+            await setAllowed();
+            const user = await getUserInfo();
+            if (user?.publicKey) {
+              set({ publicKey: user.publicKey, isConnecting: false });
+              return user.publicKey;
+            }
+            throw new Error('No public key returned by Freighter.');
+          }
+          if (provider.provider && typeof provider.provider.connect === 'function') {
+            const accounts = await provider.provider.connect();
+            const pubKey = accounts?.publicKey || accounts?.[0]?.publicKey || accounts?.[0]?.address;
+            if (pubKey) {
+              set({ publicKey: pubKey, isConnecting: false });
+              return pubKey;
+            }
+            throw new Error('No public key returned by provider.');
+          }
+          throw new Error('Provider does not support connection.');
+        } catch (err) {
+          const msg = `Failed to connect ${provider?.name || 'wallet'}. Ensure the extension is installed and unlocked.`;
+          console.error('[WalletStore] connect failed:', err);
+          set({ walletError: msg, isConnecting: false });
+          return null;
+        }
+      },
 
       checkConnection: async () => {
         if (import.meta.env.VITE_MOCK_WALLET === 'true') {
@@ -25,7 +65,7 @@ export const useWalletStore = create(
           if (await isAllowed()) {
             const user = await getUserInfo();
             if (user?.publicKey) {
-              set({ publicKey: user.publicKey, walletError: null });
+              set({ publicKey: user.publicKey, walletError: null, activeProvider: FALLBACK_PROVIDER });
               return user.publicKey;
             }
           }
@@ -42,14 +82,14 @@ export const useWalletStore = create(
           await new Promise((resolve) => setTimeout(resolve, 500));
           const mockPubKey = 'GBAZE64FKVPG4JUUP2BH63746JJ22G3A2S4QPF4UWKVA2RELLFLQZQVR';
           localStorage.setItem('mock_wallet_pubkey', mockPubKey);
-          set({ publicKey: mockPubKey, isConnecting: false });
+          set({ publicKey: mockPubKey, isConnecting: false, activeProvider: FALLBACK_PROVIDER });
           return mockPubKey;
         }
         try {
           await setAllowed();
           const user = await getUserInfo();
           if (user?.publicKey) {
-            set({ publicKey: user.publicKey, isConnecting: false });
+            set({ publicKey: user.publicKey, isConnecting: false, activeProvider: FALLBACK_PROVIDER });
             return user.publicKey;
           }
           throw new Error('No public key returned by Freighter.');
@@ -72,6 +112,7 @@ export const useWalletStore = create(
           shares: 0,
           walletError: null,
           isConnecting: false,
+          activeProvider: null,
         });
       },
 
@@ -86,6 +127,7 @@ export const useWalletStore = create(
       partialize: (state) => ({
         publicKey: state.publicKey,
         shares: state.shares,
+        activeProvider: state.activeProvider,
       }),
     },
   ),
