@@ -153,10 +153,16 @@
 
 .highlightRow {
   background: var(--primary-glow);
+  font-weight: var(--font-weight-semibold);
 }
 
 .highlightRow:hover {
   background: var(--primary-glow) !important;
+}
+
+.highlightRow .metricLabel {
+  color: var(--text-primary);
+  font-weight: var(--font-weight-semibold);
 }
 
 .metricLabel {
@@ -165,6 +171,25 @@
   font-weight: var(--font-weight-medium);
   color: var(--text-secondary);
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+.tooltipIcon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  cursor: help;
+  opacity: 0.6;
+  transition: opacity var(--transition-fast);
+  position: relative;
+}
+
+.tooltipIcon:hover {
+  opacity: 1;
 }
 
 .metricValue {

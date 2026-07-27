@@ -5,6 +5,7 @@ import VirtualList from '../VirtualList/VirtualList';
 import Card from '../Card/Card';
 import EmptyState from '../EmptyState/EmptyState';
 import { FAILED_TO_LOAD_ASSETS } from '../../constants/errors';
+import useLiveUpdatesStore from '../../store/useLiveUpdatesStore';
 import styles from './AssetGrid.module.css';
 
 const ITEM_HEIGHT = 340;
@@ -23,6 +24,9 @@ const ITEM_HEIGHT = 340;
 function AssetGrid({ assets = [], loading = false, error = null, isEmpty = false }) {
   // Ref for the grid container so we can manage roving-tabindex focus
   const gridRef = useRef(null);
+  
+  // Check which assets are receiving live updates
+  const isAssetLive = useLiveUpdatesStore((state) => state.isAssetLive);
 
   /**
    * Keyboard handler attached to the grid wrapper.
@@ -146,7 +150,7 @@ function AssetGrid({ assets = [], loading = false, error = null, isEmpty = false
             className={styles.cardFocusable}
             aria-label={asset.title || 'Asset card'}
           >
-            <AssetCard asset={asset} />
+            <AssetCard asset={asset} isLive={isAssetLive(asset.contractId)} />
           </div>
         ))}
       </div>
@@ -175,7 +179,7 @@ function AssetGrid({ assets = [], loading = false, error = null, isEmpty = false
             role="listitem"
             aria-label={item.title || 'Asset card'}
           >
-            <AssetCard asset={item} />
+            <AssetCard asset={item} isLive={isAssetLive(item.contractId)} />
           </div>
         )}
       />
