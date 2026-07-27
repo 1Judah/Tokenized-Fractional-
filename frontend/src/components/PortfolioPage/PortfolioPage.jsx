@@ -113,6 +113,8 @@ export default function PortfolioPage() {
         shares: item.shares,
         address: publicKey,
         date: new Date().toISOString(),
+        // Pass the most recent known tx hash for this holding (may be null)
+        txHash: item.txHash || null,
       });
     },
     [publicKey],
@@ -263,6 +265,7 @@ export default function PortfolioPage() {
               <span className={styles.colShares}>Shares</span>
               <span className={styles.colPrice}>Price</span>
               <span className={styles.colValue}>Total Value</span>
+              <span className={styles.colTxHash}>Tx Hash</span>
               <span className={styles.colAction}>Certificate</span>
             </div>
 
@@ -308,6 +311,16 @@ export default function PortfolioPage() {
                     className={`${styles.colValue} ${item.shares > 0 ? styles.valuePositive : ''}`}
                   >
                     {item.value.toLocaleString()}
+                  </span>
+                  {/* Transaction hash column (Issue #372) */}
+                  <span className={styles.colTxHash} title={item.txHash || ''}>
+                    {item.txHash ? (
+                      <span className={styles.txHashText}>
+                        {item.txHash.slice(0, 8)}…{item.txHash.slice(-6)}
+                      </span>
+                    ) : (
+                      <span className={styles.txHashEmpty}>—</span>
+                    )}
                   </span>
                   <span className={styles.colAction}>
                     {item.shares > 0 && (
@@ -373,6 +386,7 @@ export default function PortfolioPage() {
           shares={certItem.shares}
           ownerAddress={certItem.address}
           issueDate={certItem.date}
+          txHash={certItem.txHash}
           onComplete={handleCertificateComplete}
         />
       )}

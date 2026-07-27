@@ -8,23 +8,56 @@
  */
 
 import 'dotenv/config';
-import { validateEnv } from '../env.js';
-validateEnv();
 
 import { randomUUID } from 'crypto';
 import express from 'express';
 import cors from 'cors';
-import helmet from 'helmet';
 import pinoHttp from 'pino-http';
 import * as Sentry from '@sentry/node';
 import swaggerUi from 'swagger-ui-express';
+import swaggerJSDoc from 'swagger-jsdoc';
 import prometheus from 'express-prom-bundle';
+import { validateEnv } from '../env.js';
 
-import { CORS_ORIGINS, SENTRY_DSN, SENTRY_TRACES_SAMPLE_RATE, SENTRY_PROFILES_SAMPLE_RATE, REDIS_URL, DEPLOYMENT_COLOR, SERVICE_NAME, BUILD_ID, NODE_ENV } from './config.js';
+import {
+  CORS_ORIGINS,
+  SENTRY_DSN,
+  SENTRY_TRACES_SAMPLE_RATE,
+  SENTRY_PROFILES_SAMPLE_RATE,
+  REDIS_URL,
+  DEPLOYMENT_COLOR,
+  SERVICE_NAME,
+  BUILD_ID,
+  NODE_ENV,
+} from './config.js';
 import { logger } from './services/logger.js';
 import { apiLimiter } from './middleware/rateLimiter.js';
 import { createAdminAuth, adminAuth as legacyAdminAuth } from './middleware/auth.js';
-import { createTieredRateLimiter, initializeRedisLimiter, closeRedisLimiter, extractWalletMiddleware } from './middleware/tieredRateLimiter.js';
+import {
+  createTieredRateLimiter,
+  initializeRedisLimiter,
+  closeRedisLimiter,
+  extractWalletMiddleware,
+} from './middleware/tieredRateLimiter.js';
+import {
+  createEndpointRateLimiter,
+  initializeEndpointLimiter,
+  closeEndpointLimiter,
+} from './middleware/endpointRateLimiter.js';
+import {
+  createIPAccessControl,
+  initializeIPAccessControl,
+  closeIPAccessControl,
+  addToWhitelist,
+  removeFromWhitelist,
+  addToBlacklist,
+  removeFromBlacklist,
+  setWhitelistEnabled,
+  getWhitelist,
+  getBlacklist,
+  isWhitelistEnabled,
+} from './middleware/ipAccessControl.js';
+import { createSecurityHeadersMiddleware } from './middleware/securityHeaders.js';
 import { v1 } from './routes/rwa.js';
 import { swaggerSpec } from '../docs.js';
 import { initDatabase, getDatabase } from './services/database.js';
@@ -34,6 +67,20 @@ import { createTransactionService } from './services/transactionService.js';
 import { createAnalyticsRoutes } from './routes/analytics.js';
 import { createPurchaseRoutes } from './routes/purchases.js';
 import { createRateLimitingRoutes } from './routes/rateLimiting.js';
+import { createFederatedGraphQLServer } from './federation/gateway.js';
+import * as dataService from './services/dataService.js';
+import { partialResponseMiddleware } from './middleware/partialResponse.js';
+import { createWebhookService } from './services/webhookService.js';
+import { createWebhookRoutes } from './routes/webhooks.js';
+import { createFlashLoanProtectionService } from './services/flashLoanProtectionService.js';
+import { createFlashLoanProtectionRoutes } from './routes/flashLoanProtection.js';
+import { createGraphQLPlaygroundSecurityMiddleware } from '../graphql.js';
+import { createApiMonitoringRoutes } from './routes/apiMonitoring.js';
+import { createIPAccessRoutes } from './routes/ipAccess.js';
+import { requestLogger } from './middleware/requestLogger.js';
+import { stitchingMetrics, getSchemaVersion, stitchingConfig } from '../graphql-stitching.js';
+
+validateEnv();
 
 // ── Sentry init ───────────────────────────────────────────────────────────────
 if (SENTRY_DSN && process.env.NODE_ENV !== 'test') {
@@ -42,23 +89,26 @@ if (SENTRY_DSN && process.env.NODE_ENV !== 'test') {
     environment: process.env.NODE_ENV || 'development',
     tracesSampleRate: SENTRY_TRACES_SAMPLE_RATE,
     profilesSampleRate: SENTRY_PROFILES_SAMPLE_RATE,
-    integrations: [
-      Sentry.httpIntegration({ breadcrumbs: true }),
-      Sentry.expressIntegration(),
-    ],
+    integrations: [Sentry.httpIntegration({ breadcrumbs: true }), Sentry.expressIntegration()],
   });
   logger.info({ dsnPrefix: SENTRY_DSN.slice(0, 30) }, 'Sentry initialized');
 }
 
 // ── Prometheus metrics ────────────────────────────────────────────────────────
-const metricsMiddleware = prometheus({
-  includeMethod: true,
-  includePath: true,
-  includeStatusCode: true,
-  includeUp: true,
-  customLabels: { app: 'rwa-backend' },
-  promClient: { collectDefaultMetrics: { timeout: 5000 } },
-});
+// Only initialize prometheus metrics in non-test environments to avoid registry conflicts
+const metricsMiddleware =
+  NODE_ENV === 'test'
+    ? null
+    : prometheus({
+        includeMethod: true,
+        includePath: true,
+        includeStatusCode: true,
+        includeUp: true,
+        customLabels: { app: 'rwa-backend' },
+        promClient: {
+          collectDefaultMetrics: NODE_ENV === 'test' ? false : { timeout: 5000 },
+        },
+      });
 
 // ── App factory ───────────────────────────────────────────────────────────────
 export const app = express();
@@ -71,6 +121,11 @@ let transactionService = null;
 let analyticsRoutes = null;
 let purchasesRoutes = null;
 let rateLimitingRoutes = null;
+const webhookService = null;
+const webhookRoutes = null;
+const flashLoanProtectionService = null;
+const flashLoanProtectionRoutes = null;
+let ipAccessRoutes = null;
 
 /**
  * Initialize the app with database services.
@@ -85,6 +140,21 @@ export async function initializeApp() {
     } else if (REDIS_URL) {
       logger.warn('Redis configured but not available, using memory-based rate limiting');
     }
+
+    // Initialize endpoint-specific rate limiting
+    const endpointLimiterInitialized = await initializeEndpointLimiter();
+    if (endpointLimiterInitialized) {
+      logger.info('Endpoint rate limiter initialized');
+    }
+
+    // Initialize IP access control
+    const ipControlInitialized = await initializeIPAccessControl();
+    if (ipControlInitialized) {
+      logger.info('IP access control initialized');
+    }
+
+    // Create IP access control routes
+    ipAccessRoutes = createIPAccessRoutes(logger, adminAuth);
 
     // Initialize database
     const db = await initDatabase(NODE_ENV);
@@ -111,7 +181,16 @@ export async function initializeApp() {
     // Setup rate limiting routes
     rateLimitingRoutes = createRateLimitingRoutes(logger, adminAuth);
 
-    return { db, apiKeyService, transactionService };
+    // Initialize GraphQL Federation Gateway
+    const federatedGraphQL = await createFederatedGraphQLServer({
+      dataLayer: dataService,
+      transactionService,
+      logger,
+    });
+    app.use('/graphql', federatedGraphQL.middleware);
+    logger.info('GraphQL Federation gateway initialized at /graphql');
+
+    return { db, apiKeyService, transactionService, federatedGraphQL };
   } catch (error) {
     logger.error({ error: error.message }, 'Failed to initialize app');
     throw error;
@@ -124,13 +203,18 @@ if (SENTRY_DSN) {
   app.use(Sentry.Handlers.tracingHandler());
 }
 
-app.use(helmet());
-app.use(cors({
-  origin: CORS_ORIGINS,
-  methods: ['GET', 'POST', 'PATCH', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'x-api-key', 'X-Request-ID'],
-}));
+// Comprehensive security headers middleware
+app.use(createSecurityHeadersMiddleware(logger));
+
+app.use(
+  cors({
+    origin: CORS_ORIGINS,
+    methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'x-api-key', 'X-Request-ID'],
+  }),
+);
 app.use(express.json({ limit: '10kb' }));
+app.use(partialResponseMiddleware());
 
 // Request-ID middleware
 app.use((req, res, next) => {
@@ -140,12 +224,17 @@ app.use((req, res, next) => {
   next();
 });
 
+// API request logging middleware
+app.use(requestLogger);
+
 // HTTP request logging (silent in test)
-app.use(pinoHttp({
-  logger,
-  autoLogging: { ignore: req => req.url === '/health' },
-  genReqId: req => req.requestId,
-}));
+app.use(
+  pinoHttp({
+    logger,
+    autoLogging: { ignore: (req) => req.url === '/health' },
+    genReqId: (req) => req.requestId,
+  }),
+);
 
 // Extract wallet address for authentication detection
 app.use(extractWalletMiddleware);
@@ -162,21 +251,75 @@ app.use('/api/', (req, res, next) => {
   next();
 });
 
-// Prometheus metrics
-app.use(metricsMiddleware);
-app.get('/metrics', async (_req, res) => {
-  res.setHeader('Content-Type', metricsMiddleware.promClient.register.contentType);
-  res.send(await metricsMiddleware.promClient.register.metrics());
+// IP Access Control (whitelist/blacklist)
+app.use('/api/', createIPAccessControl());
+
+// Endpoint-specific rate limiting (granular per-endpoint limits)
+app.use('/api/', createEndpointRateLimiter());
+app.use('/graphql', createEndpointRateLimiter());
+
+// Prometheus metrics (skip in test mode to avoid metric registration conflicts)
+if (NODE_ENV !== 'test') {
+  app.use(metricsMiddleware);
+  app.get('/metrics', async (_req, res) => {
+    res.setHeader('Content-Type', metricsMiddleware.promClient.register.contentType);
+    res.send(await metricsMiddleware.promClient.register.metrics());
+  });
+} else {
+  // In test mode, return a mock metrics response
+  app.get('/metrics', async (_req, res) => {
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.send(
+      '# HELP http_requests_total Total HTTP requests\n# TYPE http_requests_total counter\nhttp_requests_total{method="GET", status="200"} 0\n',
+    );
+  });
+}
+
+// Swagger docs — generated from JSDoc @openapi annotations + static spec (Issue #295)
+const fullSwaggerSpec = swaggerJSDoc({
+  definition: swaggerSpec,
+  apis: [
+    './src/routes/rwa.js',
+    './src/routes/analytics.js',
+    './src/routes/purchases.js',
+    './src/routes/apiKeys.js',
+    './src/routes/webhooks.js',
+    './src/routes/flashLoanProtection.js',
+  ],
+});
+app.use(
+  '/api-docs',
+  swaggerUi.serve,
+  swaggerUi.setup(fullSwaggerSpec, {
+    customSiteTitle: 'RWA Marketplace API Docs',
+    customCss: '.swagger-ui .topbar { display: none }',
+    swaggerOptions: {
+      docExpansion: 'none',
+      filter: true,
+      displayRequestDuration: true,
+    },
+  }),
+);
+app.get('/api-docs.json', (_req, res) => res.json(fullSwaggerSpec));
+
+// GraphQL schema documentation endpoint (Issue #295)
+app.get('/graphql/docs', (_req, res) => {
+  res.json({
+    endpoint: '/graphql',
+    playground:
+      process.env.NODE_ENV !== 'production' || process.env.ENABLE_GRAPHQL_PLAYGROUND === 'true',
+    stitchingInfo: '/graphql/stitching/info',
+    schemaVersion: '2.0.0',
+    message: 'See docs/api/graphql-schema.md for full type documentation',
+  });
 });
 
-// Swagger docs
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
-  customSiteTitle: 'RWA Marketplace API Docs',
-}));
-app.get('/api-docs.json', (_req, res) => res.json(swaggerSpec));
-
 // Admin key verification (requires initialization)
-app.get('/api/admin/verify', (req, res, next) => adminAuth(req, res, next), (_req, res) => res.json({ ok: true }));
+app.get(
+  '/api/admin/verify',
+  (req, res, next) => adminAuth(req, res, next),
+  (_req, res) => res.json({ ok: true }),
+);
 
 // Health check
 app.get('/health', async (_req, res) => {
@@ -198,7 +341,9 @@ app.get('/health', async (_req, res) => {
       deps.redis = { status: 'ok' };
     } catch {
       deps.redis = { status: 'error', message: 'Redis configured but unreachable' };
-      return res.status(503).json({ status: 'degraded', timestamp: new Date().toISOString(), dependencies: deps });
+      return res
+        .status(503)
+        .json({ status: 'degraded', timestamp: new Date().toISOString(), dependencies: deps });
     }
   }
 
@@ -298,6 +443,110 @@ app.use('/api/rate-limiting', (req, res, next) => {
   rateLimitingRoutes(req, res, next);
 });
 
+// Mount Webhook management routes
+app.use('/api/v1/webhooks', (req, res, next) => {
+  if (!webhookRoutes) {
+    return res
+      .status(503)
+      .json({ error: 'Webhook service not initialized', code: 'SERVICE_UNAVAILABLE' });
+  }
+  webhookRoutes(req, res, next);
+});
+
+app.use('/api/webhooks', (req, res, next) => {
+  if (!webhookRoutes) {
+    return res
+      .status(503)
+      .json({ error: 'Webhook service not initialized', code: 'SERVICE_UNAVAILABLE' });
+  }
+  webhookRoutes(req, res, next);
+});
+
+// Mount Flash Loan Protection routes
+app.use('/api/v1/flash-loan-protection', (req, res, next) => {
+  if (!flashLoanProtectionRoutes) {
+    return res.status(503).json({
+      error: 'Flash loan protection service not initialized',
+      code: 'SERVICE_UNAVAILABLE',
+    });
+  }
+  flashLoanProtectionRoutes(req, res, next);
+});
+
+app.use('/api/flash-loan-protection', (req, res, next) => {
+  if (!flashLoanProtectionRoutes) {
+    return res.status(503).json({
+      error: 'Flash loan protection service not initialized',
+      code: 'SERVICE_UNAVAILABLE',
+    });
+  }
+  flashLoanProtectionRoutes(req, res, next);
+});
+
+// Mount API Monitoring routes
+const apiMonitoringRoutes = createApiMonitoringRoutes();
+app.use('/api/v1/api-monitor', apiMonitoringRoutes);
+app.use('/api/api-monitor', apiMonitoringRoutes);
+
+// Mount IP Access Control routes (admin only)
+app.use('/api/v1/ip-access', (req, res, next) => {
+  if (!ipAccessRoutes) {
+    return res
+      .status(503)
+      .json({ error: 'IP access control service not initialized', code: 'SERVICE_UNAVAILABLE' });
+  }
+  adminAuth(req, res, () => ipAccessRoutes(req, res, next));
+});
+
+app.use('/api/ip-access', (req, res, next) => {
+  if (!ipAccessRoutes) {
+    return res
+      .status(503)
+      .json({ error: 'IP access control service not initialized', code: 'SERVICE_UNAVAILABLE' });
+  }
+  adminAuth(req, res, () => ipAccessRoutes(req, res, next));
+});
+
+// Mount GraphQL Security Middleware
+app.use('/graphql', createGraphQLPlaygroundSecurityMiddleware());
+
+// ── GraphQL Schema Stitching endpoints (Issue #294) ──────────────────────────
+// Expose stitching metrics, health, and schema info
+app.get('/graphql/stitching/health', (_req, res) => {
+  const metrics = stitchingMetrics.getMetrics();
+  res.json({
+    status: 'ok',
+    schemaVersion: getSchemaVersion(),
+    services: stitchingConfig.subschemas.map((s) => ({
+      name: s.name,
+      endpoint: s.endpoint,
+      enabled: s.enabled,
+    })),
+    metrics: {
+      totalQueries: metrics.totalQueries,
+      errorRate: metrics.errorRate,
+    },
+  });
+});
+
+app.get('/graphql/stitching/metrics', (_req, res) => {
+  res.setHeader('Content-Type', 'text/plain');
+  res.send(stitchingMetrics.toPrometheus());
+});
+
+app.get('/graphql/stitching/info', (_req, res) => {
+  res.json({
+    version: getSchemaVersion(),
+    subschemas: stitchingConfig.subschemas.map((s) => ({
+      name: s.name,
+      endpoint: s.endpoint,
+      enabled: s.enabled,
+      mergeTypes: s.mergeTypes || [],
+    })),
+    conflictResolution: Object.keys(stitchingConfig.conflictResolution),
+  });
+});
+
 // 404 handler
 app.use((_req, res) => {
   res.status(404).json({ error: 'Not found', requestId: _req.requestId });
@@ -319,4 +568,6 @@ app.use((err, req, res, _next) => {
  */
 export async function closeApp() {
   await closeRedisLimiter();
+  await closeEndpointLimiter();
+  await closeIPAccessControl();
 }

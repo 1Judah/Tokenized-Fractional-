@@ -27,6 +27,9 @@ import { ApolloServer } from '@apollo/server';
 import { expressMiddleware } from '@apollo/server/express4';
 import { typeDefs, createResolvers } from './graphql.js';
 import { initializeGraphQLSubscriptions } from './graphql-ws-adapter.js';
+import { withCdnAssetUrls } from './cdn.js';
+import { createBatchHandler } from './src/middleware/batchHandler.js';
+import { createValidationMiddleware } from './src/middleware/validate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // multer memoryStorage keeps the file in memory as a Buffer (req.file.buffer).
@@ -379,6 +382,12 @@ app.use((req, res, next) => {
   next();
 });
 
+// Validation middleware — comprehensive schema validation for all API endpoints (#260)
+// Disabled in test mode to avoid breaking existing tests
+if (process.env.NODE_ENV !== 'test') {
+  app.use(createValidationMiddleware({ strict: false }));
+}
+
 // Request logging middleware (silent in test)
 app.use(pinoHttp({
   logger,
@@ -440,6 +449,78 @@ app.get('/api/admin/verify', adminAuth, (_req, res) => {
   res.json({ ok: true });
 });
 
+/**
+ * @openapi
+ * /api/admin/consistency:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Run manual data consistency check
+ *     description: |
+ *       Triggers an on-demand consistency check across all RWA assets,
+ *       comparing cache, database, and blockchain state.
+ *       Requires admin API key.
+ *     security:
+ *       - ApiKeyAuth: []
+ *     responses:
+ *       200:
+ *         description: Consistency check result
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 summary:
+ *                   type: object
+ *                   description: Aggregated consistency summary
+ *                 reports:
+ *                   type: array
+ *                   description: Per-contract consistency reports
+ *       401:
+ *         description: Unauthorized
+ */
+app.get('/api/admin/consistency', adminAuth, async (_req, res) => {
+  try {
+    const result = await runConsistencyCheck({ loadDataFn: loadData, cacheFn: cacheGet });
+    res.json(result);
+  } catch (err) {
+    logger.error({ err }, 'Consistency check endpoint error');
+    res.status(500).json({ error: 'Consistency check failed', details: err.message });
+  }
+});
+
+/**
+ * @openapi
+ * /api/admin/consistency/status:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Get consistency check scheduler status
+ *     description: Returns the current state of the periodic consistency check scheduler.
+ *     security:
+ *       - ApiKeyAuth: []
+ *     responses:
+ *       200:
+ *         description: Scheduler status
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 enabled:
+ *                   type: boolean
+ *                 running:
+ *                   type: boolean
+ *                 intervalMinutes:
+ *                   type: number
+ *                 autoRepairEnabled:
+ *                   type: boolean
+ *       401:
+ *         description: Unauthorized
+ */
+app.get('/api/admin/consistency/status', adminAuth, (_req, res) => {
+  const status = getSchedulerStatus();
+  res.json(status);
+});
+
 // ── v1 Router ─────────────────────────────────────────────────────────────────
 const v1 = Router();
 
@@ -456,10 +537,15 @@ app.get('/health', async (_req, res) => {
   if (process.env.REDIS_URL) {
     try {
       const Redis = (await import('ioredis')).default;
+      // Reuse the same TLS options as the main cache client so the health
+      // check honours REDIS_TLS, REDIS_TLS_CA, REDIS_TLS_CERT, REDIS_TLS_KEY
+      // and REDIS_TLS_REJECT_UNAUTHORIZED.
+      const tlsOptions = buildTlsOptions();
       const pingClient = new Redis(process.env.REDIS_URL, {
         lazyConnect: true,
         connectTimeout: 2000,
         maxRetriesPerRequest: 0,
+        ...(tlsOptions && { tls: tlsOptions }),
       });
       await pingClient.connect();
       await pingClient.ping();
@@ -1590,6 +1676,11 @@ v1.get('/ws/stats', (req, res) => {
 // Mount versioned router and backward-compatible aliases
 app.use('/api/v1', v1);
 app.use('/api', v1); // legacy /api/rwa aliased to /api/v1/rwa
+
+// ── Batch API endpoint — multiple operations in a single request (#256) ──────
+const batchHandler = createBatchHandler(app, { logger });
+app.post('/api/batch', batchHandler);
+app.post('/api/v1/batch', batchHandler);
 
 app.use((_req, res) => {
   res.status(404).json({ error: 'Not found', requestId: _req.requestId });

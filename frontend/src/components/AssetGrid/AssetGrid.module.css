@@ -53,3 +53,26 @@
   max-width: 320px;
   line-height: 1.5;
 }
+
+.virtualContainer {
+  width: 100%;
+  border-radius: var(--radius-sm, 0.5rem);
+  overflow: hidden;
+}
+
+.virtualItem {
+  padding: var(--spacing-xs, 0.25rem);
+}
+
+/* ── Keyboard navigation focus ring (Issue #371) ─────────────────────── */
+.cardFocusable {
+  border-radius: var(--radius-md);
+  outline: none;
+}
+
+.cardFocusable:focus-visible {
+  /* Visible ring that works in both dark and light themes */
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 5px var(--primary-glow);
+}

@@ -3,11 +3,16 @@
 # Dev mode  (hot-reload):  docker compose up
 # Prod mode (built nginx): docker compose --profile prod up --build
 # With Redis cache:        docker compose --profile redis up
+# With Redis + TLS:        docker compose --profile redis-tls up
 #
-# Copy backend/.env.example → backend/.env and fill in values before starting.
+# Setup steps:
+#   1. Copy backend/.env.example → backend/.env and fill in values.
+#   2. Generate TLS certificates:  bash scripts/generate-certs.sh
+#      (creates ./certs/  with CA, nginx, and Redis client certs)
 
 services:
 
+  # ── Express.js backend API ─────────────────────────────────────────────────
   backend:
     build: ./backend
     restart: unless-stopped
@@ -22,6 +27,8 @@ services:
     volumes:
       # Persist data.json across restarts
       - backend-data:/app/data
+      # Mount TLS certificates (read-only) — used for Redis mTLS and reference
+      - ./certs:/etc/ssl/rwa:ro
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
       interval: 30s
@@ -65,15 +72,24 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
+      - "443:443"
+    volumes:
+      # Mount TLS certificates for Nginx TLS termination (read-only)
+      - ./certs:/etc/ssl/rwa:ro
+      # Nginx config with TLS directives
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # ACME challenge directory for Let's Encrypt / certbot renewals
+      - certbot-webroot:/var/www/certbot:ro
     depends_on:
       backend:
         condition: service_healthy
     profiles: ["prod"]
 
-  # ── Redis (optional cache) ─────────────────────────────────────────────────
+  # ── Redis — plain TCP (optional cache, no TLS) ─────────────────────────────
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # Disable persistence to minimise disk I/O for a pure cache
     command: redis-server --save "" --appendonly no
     ports:
       - "6379:6379"

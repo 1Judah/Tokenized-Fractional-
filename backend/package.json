@@ -10,8 +10,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --experimental-vm-modules node_modules/.bin/jest --forceExit",
-    "deploy": "echo 'Push to main — Render auto-deploys via render.yaml'",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --forceExit",
+    "deploy": "echo 'Push to main \u2014 Render auto-deploys via render.yaml'",
     "migrate": "knex migrate:latest",
     "migrate:rollback": "knex migrate:rollback",
     "migrate:make": "knex migrate:make",
@@ -23,7 +23,9 @@
     "backup": "node backup.js",
     "backup:list": "node backup.js --list",
     "backup:verify": "node backup.js --verify-latest",
-    "restore": "node restore.js"
+    "restore": "node restore.js",
+    "docs:generate": "node scripts/generate-docs.js",
+    "docs:serve": "node scripts/generate-docs.js && echo \"Docs generated in docs/api/\""
   },
   "jest": {
     "testEnvironment": "node",
@@ -36,10 +38,13 @@
   },
   "dependencies": {
     "@apollo/server": "^4.10.1",
+    "@apollo/gateway": "^2.7.0",
+    "@apollo/subgraph": "^2.7.0",
     "@sentry/node": "^10.60.0",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^11.10.0",
     "cors": "^2.8.5",
+    "dataloader": "^2.2.2",
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
     "express-prom-bundle": "^7.0.0",
@@ -62,7 +67,8 @@
     "prom-client": "^15.1.0",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1",
-    "ws": "^8.17.0"
+    "ws": "^8.17.0",
+    "supertest": "^7.0.0"
   },
   "devDependencies": {
     "@jest/globals": "^30.4.1",
@@ -72,7 +78,6 @@
     "eslint-plugin-import": "^2.32.0",
     "eslint-plugin-prettier": "^5.5.6",
     "jest": "^29.7.0",
-    "prettier": "^3.9.1",
-    "supertest": "^7.0.0"
+    "prettier": "^3.9.1"
   }
 }
