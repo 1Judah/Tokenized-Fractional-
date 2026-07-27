@@ -9,7 +9,7 @@
 
 #[cfg(test)]
 mod tests {
-    use soroban_sdk::{Address, Env, Vec, token};
+    use soroban_sdk::{testutils::Address as _, Address, Env, Vec, token};
 
     // Setup helper struct and functions
     struct TestEnv {

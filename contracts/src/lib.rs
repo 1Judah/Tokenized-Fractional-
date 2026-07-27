@@ -15,6 +15,10 @@ contractmeta!(key = "version", val = "0.4.0");
 contractmeta!(key = "description", val = "Tokenized Fractional RWA Marketplace");
 contractmeta!(key = "sep", val = "41");
 
+const DIVIDEND_TYPE_CASH: u32 = 0;
+const DIVIDEND_TYPE_TOKEN_BASED: u32 = 1;
+const DIVIDEND_WITHHOLDING_MAX_BPS: u32 = 10_000;
+
 /// Minimal interface for calling the deployed ShareCertificate NFT contract.
 #[contractclient(name = "NftContractClient")]
 pub trait NftContractInterface {
@@ -48,6 +52,10 @@ pub enum DataKey {
     Holders,
     MetadataUri,
     DividendSchedule,
+    DividendPolicy,
+    DividendPosition(Address),
+    DividendHistory,
+    DividendHistoryCounter,
     LastDistribution,
     Whitelisted(Address),
     SellOrder(u64),
@@ -164,6 +172,35 @@ pub struct SellOrder {
 pub struct DividendSchedule {
     pub amount_per_share: i128,
     pub interval: u64,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct DividendPolicy {
+    pub dividend_type: u32,
+    pub payout_token: Address,
+    pub withholding_bps: u32,
+    pub reinvestment_enabled: bool,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct DividendPosition {
+    pub accrued_amount: i128,
+    pub claimed_amount: i128,
+    pub reinvestment_enabled: bool,
+    pub last_update_ledger: u64,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct DividendHistoryEntry {
+    pub id: u64,
+    pub timestamp: u64,
+    pub total_amount: i128,
+    pub holder_count: u32,
+    pub withholding_bps: u32,
+    pub payout_token: Address,
 }
 
 #[contracttype]
@@ -373,12 +410,41 @@ pub struct EventScheduledDividend {
     holder_count: u32,
 }
 
-// ← NEW: dividend distribution event
 #[contractevent(data_format = "vec")]
 pub struct EventDistributeDividends {
     token: Address,
     total_amount: i128,
     holder_count: u32,
+}
+
+#[contractevent(data_format = "vec")]
+pub struct EventDividendPolicySet {
+    dividend_type: u32,
+    payout_token: Address,
+    withholding_bps: u32,
+    reinvestment_enabled: bool,
+}
+
+#[contractevent(data_format = "vec")]
+pub struct EventDividendAccrued {
+    holder: Address,
+    amount: i128,
+    payout_token: Address,
+}
+
+#[contractevent(data_format = "vec")]
+pub struct EventDividendClaimed {
+    holder: Address,
+    amount: i128,
+    reinvestment_enabled: bool,
+}
+
+#[contractevent(data_format = "vec")]
+pub struct EventDividendHistoryRecorded {
+    id: u64,
+    total_amount: i128,
+    holder_count: u32,
+    withholding_bps: u32,
 }
 
 #[contractevent(data_format = "vec")]
@@ -556,7 +622,7 @@ pub struct EventNftContractSet {
     nft_contract: Address,
 }
 
-#// ── Issue #270: Whitelist enhancement events ──────────────────────
+// ── Issue #270: Whitelist enhancement events ──────────────────────
 
 #[contractevent(data_format = "vec")]
 pub struct EventWhitelistBatch {
@@ -727,6 +793,72 @@ fn checked_add_u32(a: u32, b: u32) -> u32 {
 /// Safely subtract two u32 values, panicking on underflow
 fn checked_sub_u32(a: u32, b: u32) -> u32 {
     a.checked_sub(b).unwrap_or_else(|| panic!("Arithmetic underflow: cannot subtract {} from {}", b, a))
+}
+
+fn _load_dividend_policy(env: &Env) -> Option<DividendPolicy> {
+    env.storage().instance().get(&DataKey::DividendPolicy)
+}
+
+fn _validate_dividend_type(dividend_type: u32) {
+    if !matches!(dividend_type, DIVIDEND_TYPE_CASH | DIVIDEND_TYPE_TOKEN_BASED) {
+        panic!("Unsupported dividend type");
+    }
+}
+
+fn _resolve_dividend_policy(env: &Env, fallback_token: &Address) -> DividendPolicy {
+    _load_dividend_policy(env).unwrap_or_else(|| DividendPolicy {
+        dividend_type: DIVIDEND_TYPE_CASH,
+        payout_token: fallback_token.clone(),
+        withholding_bps: 0,
+        reinvestment_enabled: false,
+    })
+}
+
+fn _calculate_pro_rata_amount(total_amount: i128, holder_shares: u32, total_shares: u32) -> i128 {
+    if total_amount <= 0 || holder_shares == 0 || total_shares == 0 {
+        return 0;
+    }
+    checked_mul_i128(total_amount, holder_shares as i128) / (total_shares as i128)
+}
+
+fn _load_dividend_position(env: &Env, owner: &Address) -> DividendPosition {
+    env.storage()
+        .persistent()
+        .get(&DataKey::DividendPosition(owner.clone()))
+        .unwrap_or_else(|| DividendPosition {
+            accrued_amount: 0,
+            claimed_amount: 0,
+            reinvestment_enabled: false,
+            last_update_ledger: 0,
+        })
+}
+
+fn _store_dividend_position(env: &Env, owner: &Address, position: &DividendPosition) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::DividendPosition(owner.clone()), position);
+}
+
+fn _load_dividend_history(env: &Env) -> Vec<DividendHistoryEntry> {
+    env.storage()
+        .instance()
+        .get(&DataKey::DividendHistory)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+fn _store_dividend_history(env: &Env, history: &Vec<DividendHistoryEntry>) {
+    env.storage().instance().set(&DataKey::DividendHistory, history);
+}
+
+fn _get_next_dividend_history_id(env: &Env) -> u64 {
+    let current: u64 = env
+        .storage()
+        .instance()
+        .get(&DataKey::DividendHistoryCounter)
+        .unwrap_or(0);
+    let next = current.saturating_add(1);
+    env.storage().instance().set(&DataKey::DividendHistoryCounter, &next);
+    next
 }
 
 // ── Issue #313: Gas Optimization Helpers (removed - unused, caused SDK trait bound issues)
@@ -1630,12 +1762,10 @@ impl RwaMarketplace {
     /// Only the admin may call this. The contract must hold enough `token`
     /// balance to cover `total_amount` before calling.
     pub fn distribute_dividends(env: Env, token: Address, total_amount: i128) {
-        // Only admin can distribute
         let admin: Address = env.storage().instance().get(&DataKey::Admin)
             .expect("Contract not initialized: admin");
         admin.require_auth();
 
-        // Issue #310: Check granular pause for dividends
         if _is_function_paused(&env, FN_DIVIDEND) {
             panic!("Dividend distribution is currently paused");
         }
@@ -1664,11 +1794,16 @@ impl RwaMarketplace {
             panic!("No holders registered");
         }
 
-        let client = token::TokenClient::new(&env, &token);
-        let contract_addr = env.current_contract_address();
+        let policy = _resolve_dividend_policy(&env, &token);
 
-        // Track holders whose balance has dropped to 0 (to clean up registry)
+        let admin_addr: Address = env.storage().instance().get(&DataKey::Admin)
+            .unwrap_or_else(|| panic!("Contract not initialized: admin"));
+        let payout_token = policy.payout_token.clone();
+        let client = token::TokenClient::new(&env, &payout_token);
+        let contract_addr = env.current_contract_address();
         let mut active_holders: Vec<Address> = Vec::new(&env);
+        let mut history = _load_dividend_history(&env);
+        let history_id = _get_next_dividend_history_id(&env);
 
         for holder in holders.iter() {
             let holder_shares: u32 = env
@@ -1678,33 +1813,145 @@ impl RwaMarketplace {
                 .unwrap_or(0);
 
             if holder_shares == 0 {
-                // Balance is zero — skip and exclude from registry
                 continue;
             }
 
             active_holders.push_back(holder.clone());
 
-            // Pro-rata: holder_amount = total_amount * holder_shares / total_shares
-            // Use checked arithmetic to avoid overflow
-            let holder_amount: i128 =
-                checked_mul_i128(total_amount, holder_shares as i128) / (total_shares as i128);
+            let raw_amount = _calculate_pro_rata_amount(total_amount, holder_shares, total_shares);
+            let withholding = (raw_amount as i128 * policy.withholding_bps as i128) / DIVIDEND_WITHHOLDING_MAX_BPS as i128;
+            let net_amount = raw_amount.saturating_sub(withholding);
+            let mut position = _load_dividend_position(&env, &holder);
+            let should_accrue = policy.withholding_bps > 0 || policy.reinvestment_enabled || position.reinvestment_enabled;
 
-            if holder_amount > 0 {
-                client.transfer(&contract_addr, &holder, &holder_amount);
+            if should_accrue {
+                if net_amount > 0 {
+                    position.accrued_amount = checked_add_i128(position.accrued_amount, net_amount);
+                    position.last_update_ledger = env.ledger().sequence() as u64;
+                    _store_dividend_position(&env, &holder, &position);
+                    EventDividendAccrued {
+                        holder: holder.clone(),
+                        amount: net_amount,
+                        payout_token: policy.payout_token.clone(),
+                    }
+                    .publish(&env);
+                }
+
+                if raw_amount > 0 && policy.withholding_bps > 0 {
+                    let withholding_amount = raw_amount.saturating_sub(net_amount);
+                    if withholding_amount > 0 {
+                        client.transfer(&contract_addr, &admin_addr, &withholding_amount);
+                    }
+                }
+            } else if raw_amount > 0 {
+                client.transfer(&contract_addr, &holder, &raw_amount);
             }
         }
 
-        // Update holder registry — removes any zero-balance holders
         env.storage().instance().set(&DataKey::Holders, &active_holders);
 
-        let holder_count = active_holders.len();
+        history.push_back(DividendHistoryEntry {
+            id: history_id,
+            timestamp: env.ledger().timestamp(),
+            total_amount,
+            holder_count: active_holders.len(),
+            withholding_bps: policy.withholding_bps,
+            payout_token: policy.payout_token.clone(),
+        });
+        _store_dividend_history(&env, &history);
 
         EventDistributeDividends {
             token,
             total_amount,
-            holder_count,
+            holder_count: active_holders.len(),
         }
         .publish(&env);
+
+        EventDividendHistoryRecorded {
+            id: history_id,
+            total_amount,
+            holder_count: active_holders.len(),
+            withholding_bps: policy.withholding_bps,
+        }
+        .publish(&env);
+    }
+
+    pub fn set_dividend_policy(env: Env, dividend_type: u32, payout_token: Address, withholding_bps: u32, reinvestment_enabled: bool) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin)
+            .expect("Contract not initialized: admin");
+        admin.require_auth();
+
+        _validate_dividend_type(dividend_type);
+
+        if withholding_bps > DIVIDEND_WITHHOLDING_MAX_BPS {
+            panic!("Withholding basis points must be between 0 and 10000");
+        }
+
+        let policy = DividendPolicy {
+            dividend_type,
+            payout_token: payout_token.clone(),
+            withholding_bps,
+            reinvestment_enabled,
+        };
+        env.storage().instance().set(&DataKey::DividendPolicy, &policy);
+
+        EventDividendPolicySet {
+            dividend_type,
+            payout_token,
+            withholding_bps,
+            reinvestment_enabled,
+        }
+        .publish(&env);
+    }
+
+    pub fn set_dividend_reinvestment(env: Env, holder: Address, enabled: bool) {
+        holder.require_auth();
+        let mut position = _load_dividend_position(&env, &holder);
+        position.reinvestment_enabled = enabled;
+        _store_dividend_position(&env, &holder, &position);
+    }
+
+    pub fn claim_dividends(env: Env, holder: Address) {
+        holder.require_auth();
+
+        let position = _load_dividend_position(&env, &holder);
+        if position.accrued_amount <= 0 {
+            panic!("No accrued dividends available to claim");
+        }
+
+        let policy = _resolve_dividend_policy(
+            &env,
+            &env.storage().instance().get(&DataKey::PaymentToken).expect("Contract not initialized: payment token"),
+        );
+
+        let token_client = token::TokenClient::new(&env, &policy.payout_token);
+        let contract_addr = env.current_contract_address();
+
+        let mut updated_position = position.clone();
+        updated_position.claimed_amount = checked_add_i128(updated_position.claimed_amount, position.accrued_amount);
+        updated_position.accrued_amount = 0;
+        _store_dividend_position(&env, &holder, &updated_position);
+
+        token_client.transfer(&contract_addr, &holder, &position.accrued_amount);
+
+        EventDividendClaimed {
+            holder: holder.clone(),
+            amount: position.accrued_amount,
+            reinvestment_enabled: updated_position.reinvestment_enabled,
+        }
+        .publish(&env);
+    }
+
+    pub fn get_dividend_position(env: Env, holder: Address) -> DividendPosition {
+        _load_dividend_position(&env, &holder)
+    }
+
+    pub fn get_dividend_history(env: Env) -> Vec<DividendHistoryEntry> {
+        _load_dividend_history(&env)
+    }
+
+    pub fn get_dividend_history_count(env: Env) -> u32 {
+        _load_dividend_history(&env).len() as u32
     }
 
     /// Register a holder if not already present.
@@ -1995,14 +2242,17 @@ impl RwaMarketplace {
             panic!("No holders registered");
         }
 
-        let token_id: Address = env.storage().instance()
+        let policy = _resolve_dividend_policy(&env, &env.storage().instance()
             .get(&DataKey::PaymentToken)
-            .expect("Contract not initialized: payment token");
+            .expect("Contract not initialized: payment token"));
+        let token_id = policy.payout_token.clone();
 
         let client = token::TokenClient::new(&env, &token_id);
         let contract_addr = env.current_contract_address();
 
         let mut active_holders: Vec<Address> = Vec::new(&env);
+        let mut history = _load_dividend_history(&env);
+        let history_id = _get_next_dividend_history_id(&env);
 
         for holder in holders.iter() {
             let holder_shares: u32 = env.storage().persistent()
@@ -2015,19 +2265,60 @@ impl RwaMarketplace {
 
             active_holders.push_back(holder.clone());
 
-            let holder_amount = checked_mul_i128(total_amount, holder_shares as i128) / (total_shares as i128);
+            let raw_amount = _calculate_pro_rata_amount(total_amount, holder_shares, total_shares);
+            let withholding = (raw_amount as i128 * policy.withholding_bps as i128) / DIVIDEND_WITHHOLDING_MAX_BPS as i128;
+            let net_amount = raw_amount.saturating_sub(withholding);
+            let mut position = _load_dividend_position(&env, &holder);
+            let should_accrue = policy.withholding_bps > 0 || policy.reinvestment_enabled || position.reinvestment_enabled;
 
-            if holder_amount > 0 {
-                client.transfer(&contract_addr, &holder, &holder_amount);
+            if should_accrue {
+                if net_amount > 0 {
+                    position.accrued_amount = checked_add_i128(position.accrued_amount, net_amount);
+                    position.last_update_ledger = env.ledger().sequence() as u64;
+                    _store_dividend_position(&env, &holder, &position);
+                    EventDividendAccrued {
+                        holder: holder.clone(),
+                        amount: net_amount,
+                        payout_token: policy.payout_token.clone(),
+                    }
+                    .publish(&env);
+                }
+
+                if raw_amount > 0 && policy.withholding_bps > 0 {
+                    let withholding_amount = raw_amount.saturating_sub(net_amount);
+                    if withholding_amount > 0 {
+                        let admin_addr: Address = env.storage().instance().get(&DataKey::Admin).unwrap_or_else(|| panic!("Contract not initialized: admin"));
+                        client.transfer(&contract_addr, &admin_addr, &withholding_amount);
+                    }
+                }
+            } else if raw_amount > 0 {
+                client.transfer(&contract_addr, &holder, &raw_amount);
             }
         }
 
         env.storage().instance().set(&DataKey::Holders, &active_holders);
         env.storage().instance().set(&DataKey::LastDistribution, &now);
 
+        history.push_back(DividendHistoryEntry {
+            id: history_id,
+            timestamp: now,
+            total_amount,
+            holder_count: active_holders.len(),
+            withholding_bps: policy.withholding_bps,
+            payout_token: policy.payout_token.clone(),
+        });
+        _store_dividend_history(&env, &history);
+
         let holder_count = active_holders.len();
 
         EventScheduledDividend { total_amount, holder_count }.publish(&env);
+        EventDividendHistoryRecorded {
+            id: history_id,
+            total_amount,
+            holder_count,
+            withholding_bps: policy.withholding_bps,
+        }
+        .publish(&env);
     }
 
     pub fn get_shares(env: Env, owner: Address) -> u32 {
@@ -2711,7 +3002,7 @@ impl RwaMarketplace {
             .expect("Contract not initialized: admin");
         admin.require_auth();
 
-        let mut config = Self::get_purchase_limits(env);
+        let mut config = Self::get_purchase_limits(env.clone());
         config.enabled = enabled;
         env.storage().instance().set(&DataKey::PurchaseLimitConfig, &config);
 
@@ -2832,7 +3123,7 @@ impl RwaMarketplace {
             panic!("Invalid period. Must be 1 (daily), 2 (weekly), or 3 (monthly)");
         }
 
-        let mut history = Self::get_user_purchase_history(env, address.clone());
+        let mut history = Self::get_user_purchase_history(env.clone(), address.clone());
 
         match period {
             1 => {
@@ -2855,7 +3146,7 @@ impl RwaMarketplace {
 
         env.storage()
             .persistent()
-            .set(&DataKey::UserPurchaseHistory(address), &history);
+            .set(&DataKey::UserPurchaseHistory(address.clone()), &history);
 
         EventUserPurchaseReset { address, period }.publish(&env);
     }
@@ -4116,6 +4407,57 @@ mod test {
     }
 
     #[test]
+    fn test_dividend_policy_withholding_and_claims() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+
+        let buyer2 = Address::generate(&te.env);
+        mint(&te, &te.buyer, 100_000);
+        mint(&te, &buyer2, 100_000);
+        c.add_to_whitelist(&te.buyer);
+        c.add_to_whitelist(&buyer2);
+
+        c.buy_shares(&te.buyer, &500, &te.token_id);
+        c.buy_shares(&buyer2, &500, &te.token_id);
+
+        c.set_dividend_policy(&0, &te.token_id, &1000, &false);
+        let dividend_amount: i128 = 1_000;
+        mint(&te, &te.contract_id, dividend_amount);
+
+        c.distribute_dividends(&te.token_id, &dividend_amount);
+
+        let position = c.get_dividend_position(&te.buyer);
+        assert_eq!(position.accrued_amount, 450);
+        assert_eq!(position.claimed_amount, 0);
+        assert_eq!(c.get_dividend_history_count(), 1);
+
+        c.claim_dividends(&te.buyer);
+        let updated_position = c.get_dividend_position(&te.buyer);
+        assert_eq!(updated_position.claimed_amount, 450);
+
+        let token_client = token::TokenClient::new(&te.env, &te.token_id);
+        assert_eq!(token_client.balance(&te.buyer), 100_000 - 50_000 + 450);
+        assert_eq!(token_client.balance(&te.admin), 100_000 + 100);
+    }
+
+    #[test]
+    fn test_dividend_reinvestment_toggle() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+        c.buy_shares(&te.buyer, &500, &te.token_id);
+
+        c.set_dividend_policy(&0, &te.token_id, &0, &false);
+        c.set_dividend_reinvestment(&te.buyer, &true);
+
+        let position = c.get_dividend_position(&te.buyer);
+        assert!(position.reinvestment_enabled);
+    }
+
+    #[test]
     #[should_panic(expected = "Dividend amount must be positive")]
     fn test_distribute_zero_amount() {
         let te = setup();
@@ -4611,6 +4953,42 @@ mod test {
         let token_client = token::TokenClient::new(&te.env, &te.token_id);
         // buyer: 100_000 - 500*100 + 2500 + 2500 = 100_000 - 50_000 + 5_000
         assert_eq!(token_client.balance(&te.buyer), 100_000 - 50_000 + 5_000);
+    }
+
+    #[test]
+    fn test_process_scheduled_dividend_honors_policy_withholding_and_history() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+        c.buy_shares(&te.buyer, &500, &te.token_id);
+
+        c.set_dividend_policy(&0, &te.token_id, &1000, &false);
+        c.set_dividend_schedule(&10, &100);
+        mint(&te, &te.contract_id, 5_000);
+
+        te.env.ledger().set_timestamp(te.env.ledger().timestamp() + 101);
+        c.process_scheduled_dividend();
+
+        let position = c.get_dividend_position(&te.buyer);
+        assert_eq!(position.accrued_amount, 4_500);
+        assert_eq!(position.claimed_amount, 0);
+        assert_eq!(c.get_dividend_history_count(), 1);
+
+        let token_client = token::TokenClient::new(&te.env, &te.token_id);
+        assert_eq!(token_client.balance(&te.admin), 50_500);
+    }
+
+    #[test]
+    #[should_panic(expected = "Unsupported dividend type")]
+    fn test_set_dividend_policy_rejects_unsupported_type() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+
+        c.set_dividend_policy(&2, &te.token_id, &0, &false);
     }
 
     #[test]
@@ -6025,6 +6403,10 @@ mod oracle_bridge_tests {
         RwaMarketplaceClient::new(&te.env, &te.contract_id)
     }
 
+    fn mint(te: &TestEnv, to: &Address, amount: i128) {
+        token::StellarAssetClient::new(&te.env, &te.token_id).mint(to, &amount);
+    }
+
     fn init(te: &TestEnv) {
         let c = client(te);
         c.init(&te.admin, &te.token_id, &INIT_PRICE, &INIT_TOTAL);
@@ -6277,6 +6659,10 @@ mod sip4_metadata_tests {
         let c = client(te);
         c.init(&te.admin, &te.token_id, &INIT_PRICE, &INIT_TOTAL);
         c.add_to_whitelist(&te.buyer);
+    }
+
+    fn mint(te: &TestEnv, to: &Address, amount: i128) {
+        token::StellarAssetClient::new(&te.env, &te.token_id).mint(to, &amount);
     }
 
     #[test]

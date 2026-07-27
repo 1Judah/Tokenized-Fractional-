@@ -9,7 +9,7 @@
 
 #[cfg(test)]
 mod dividend_integration_tests {
-    use soroban_sdk::{Address, Env, Vec};
+    use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
 
     // Note: In a real test setup, these would be imported from the main contract module
     // For now, we'll define minimal stub structures for documentation purposes
