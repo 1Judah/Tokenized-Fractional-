@@ -296,6 +296,7 @@ function App() {
   const notifiedRef = useRef({});
 
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
+  const [view, setView] = useState('marketplace');
 
   // ── WebSocket for real-time updates (Issues #425, #426) ─────────────────────
   const wsUrl = `ws://${new URL(API_URL).host}/ws`;
@@ -495,7 +496,7 @@ function App() {
   const buySharesTx = useSorobanWrite('buy_shares');
   const loadingBuy = buySharesTx.loading;
 
-  const { data: priceData } = useSorobanRead('get_price', [], { skip: CONTRACT_ID.length < 50 });
+  const { data: priceData, loading: loadingPrice } = useSorobanRead('get_price', [], { skip: CONTRACT_ID.length < 50 });
   const pricePerShare = priceData?.retval ? Number(priceData.retval.u64()) : null;
 
   const { data: availableSharesData } = useSorobanRead('get_available_shares', [], {
