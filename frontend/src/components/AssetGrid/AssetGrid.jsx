@@ -1,6 +1,6 @@
 import React from 'react';
 import AssetCard from '../AssetCard/AssetCard';
-import AssetCardSkeleton from '../Skeleton/AssetCardSkeleton';
+import { AssetCardSkeleton } from '../Skeleton';
 import Card from '../Card/Card';
 import { FAILED_TO_LOAD_ASSETS } from '../../constants/errors';
 import styles from './AssetGrid.module.css';

@@ -12,9 +12,7 @@ import Alert from '../components/Alert/Alert';
 import Button from '../components/Button/Button';
 import AssetCard from '../components/AssetCard/AssetCard';
 import AssetGrid from '../components/AssetGrid/AssetGrid';
-import Skeleton from '../components/Skeleton/Skeleton';
-import AssetCardSkeleton from '../components/Skeleton/AssetCardSkeleton';
-import { TextSkeleton, ImageSkeleton } from '../components/Skeleton/index';
+import { TextSkeleton, ImageSkeleton, AssetCardSkeleton } from '../components/Skeleton/index';
 
 // ── Store imports ──────────────────────────────────────────────────────────
 import { useWalletStore } from '../store/useWalletStore';
