@@ -1,0 +1,426 @@
+# Priority Queue Service - Federated Schema
+# This service manages priority queues for oversubscribed asset allocations
+
+extend schema
+  @link(url: "https://specs.apollo.dev/federation/v2.3",
+        import: ["@key", "@shareable", "@inaccessible", "@override", "@provides", "@external"])
+
+type PriorityQueue @key(fields: "queueId") {
+  queueId: ID!
+  assetContractId: String!
+  queueName: String!
+  description: String
+  allocationAlgorithm: AllocationAlgorithm!
+  totalSlots: Int!
+  availableSlots: Int!
+  opensAt: String
+  closesAt: String
+  isActive: Boolean!
+  tierConfig: TierConfig
+  governanceRules: GovernanceRules
+  createdAt: String!
+  updatedAt: String!
+  # Extended fields
+  entries: [QueueEntry!] @provides(fields: "entryId userWalletAddress status")
+  events: [QueueEvent!] @provides(fields: "eventId eventType")
+  analytics: QueueAnalytics
+}
+
+type QueueEntry @key(fields: "entryId") {
+  entryId: ID!
+  queueId: ID!
+  userWalletAddress: String!
+  tierId: String
+  requestedShares: Int!
+  allocatedShares: Int!
+  queuePosition: Int!
+  status: QueueEntryStatus!
+  priorityScore: Float!
+  joinedAt: String!
+  allocatedAt: String
+  metadata: JSON
+  createdAt: String!
+  updatedAt: String!
+  # Reference to queue
+  queue: PriorityQueue @provides(fields: "queueName allocationAlgorithm")
+}
+
+type QueueEvent @key(fields: "eventId") {
+  eventId: ID!
+  queueId: ID!
+  entryId: String
+  userWalletAddress: String
+  eventType: QueueEventType!
+  eventData: JSON
+  notes: String
+  createdAt: String!
+}
+
+type QueueAnalytics {
+  analyticsId: ID!
+  queueId: ID!
+  snapshotDate: String!
+  totalEntries: Int!
+  entriesByTier: JSON!
+  avgQueueTimeSeconds: Int!
+  totalRequestedShares: Int!
+  totalAllocatedShares: Int!
+  allocationRate: Float!
+  withdrawals: Int!
+  tierAllocationStats: JSON!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type TierConfig {
+  platinum: TierSettings
+  gold: TierSettings
+  silver: TierSettings
+  bronze: TierSettings
+  community: TierSettings
+}
+
+type TierSettings {
+  guaranteedSlots: Int!
+  enabled: Boolean!
+}
+
+type GovernanceRules {
+  requireKyc: Boolean!
+  requireWhitelist: Boolean!
+  maxSharesPerUser: Int
+  timeWindowEnabled: Boolean!
+}
+
+type GovernanceRule {
+  governanceId: ID!
+  queueId: ID!
+  ruleName: String!
+  ruleType: GovernanceRuleType!
+  ruleConfig: JSON!
+  isActive: Boolean!
+  effectiveFrom: String!
+  effectiveUntil: String
+  createdAt: String!
+  updatedAt: String!
+}
+
+type AllocationNotification {
+  notificationId: ID!
+  entryId: ID!
+  queueId: ID!
+  userWalletAddress: String!
+  notificationType: NotificationType!
+  notificationData: JSON!
+  status: NotificationStatus!
+  retryCount: Int!
+  expiresAt: String!
+  sentAt: String
+  createdAt: String!
+  updatedAt: String!
+}
+
+type WalletWhitelistEntry {
+  walletAddress: String!
+  tierId: String
+  metadata: JSON!
+  whitelistedAt: String!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type WalletBlacklistEntry {
+  walletAddress: String!
+  reason: String
+  blacklistedAt: String!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type WalletStatus {
+  walletAddress: String!
+  whitelisted: Boolean!
+  blacklisted: Boolean!
+  tierId: String
+  metadata: JSON!
+  blacklistReason: String
+  whitelistedAt: String
+  blacklistedAt: String
+}
+
+type AllocationResult {
+  entryId: ID!
+  userWalletAddress: String!
+  allocatedShares: Int!
+  requestedShares: Int!
+  allocationType: String
+}
+
+type QueueCompliance {
+  compliant: Boolean!
+  violations: [ComplianceViolation!]!
+}
+
+type ComplianceViolation {
+  rule: String!
+  reason: String!
+}
+
+enum AllocationAlgorithm {
+  FIFO
+  WEIGHTED
+  LOTTERY
+  HYBRID
+}
+
+enum QueueEntryStatus {
+  PENDING
+  ALLOCATED
+  PARTIALLY_ALLOCATED
+  REJECTED
+  WITHDRAWN
+}
+
+enum QueueEventType {
+  QUEUE_CREATED
+  QUEUE_OPENED
+  QUEUE_CLOSED
+  USER_JOINED
+  USER_LEFT
+  POSITION_CHANGED
+  ALLOCATION_STARTED
+  ALLOCATION_COMPLETED
+  ALLOCATION_FAILED
+  TIER_ASSIGNED
+  PRIORITY_ADJUSTED
+  GOVERNANCE_UPDATED
+}
+
+enum GovernanceRuleType {
+  ALLOCATION_CAP
+  TIME_WINDOW
+  VERIFICATION_REQUIRED
+  WHITELIST_ONLY
+  KYC_REQUIRED
+}
+
+enum NotificationType {
+  ALLOCATION_OFFER
+  ALLOCATION_CONFIRMED
+  ALLOCATION_EXPIRED
+  QUEUE_POSITION_UPDATE
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  DELIVERED
+  FAILED
+}
+
+input CreateQueueInput {
+  assetContractId: String!
+  queueName: String!
+  description: String
+  allocationAlgorithm: AllocationAlgorithm!
+  totalSlots: Int!
+  opensAt: String
+  closesAt: String
+  tierConfig: TierConfigInput
+  governanceRules: GovernanceRulesInput
+}
+
+input UpdateQueueInput {
+  queueName: String
+  description: String
+  allocationAlgorithm: AllocationAlgorithm
+  totalSlots: Int
+  opensAt: String
+  closesAt: String
+  tierConfig: TierConfigInput
+  governanceRules: GovernanceRulesInput
+}
+
+input TierConfigInput {
+  platinum: TierSettingsInput
+  gold: TierSettingsInput
+  silver: TierSettingsInput
+  bronze: TierSettingsInput
+  community: TierSettingsInput
+}
+
+input TierSettingsInput {
+  guaranteedSlots: Int
+  enabled: Boolean
+}
+
+input GovernanceRulesInput {
+  requireKyc: Boolean
+  requireWhitelist: Boolean
+  maxSharesPerUser: Int
+  timeWindowEnabled: Boolean
+}
+
+input JoinQueueInput {
+  queueId: ID!
+  userWalletAddress: String!
+  requestedShares: Int!
+  metadata: JSON
+}
+
+input PriorityAdjustmentInput {
+  timeWeight: Float
+  investmentWeight: Float
+  loyaltyWeight: Float
+}
+
+input AddGovernanceRuleInput {
+  queueId: ID!
+  ruleName: String!
+  ruleType: GovernanceRuleType!
+  ruleConfig: JSON!
+  isActive: Boolean
+  effectiveFrom: String
+  effectiveUntil: String
+}
+
+input AddToWhitelistInput {
+  walletAddress: String!
+  tierId: String
+  metadata: JSON
+}
+
+input BulkWhitelistInput {
+  wallets: [WhitelistEntryInput!]!
+  defaultTierId: String
+}
+
+input WhitelistEntryInput {
+  walletAddress: String!
+  tierId: String
+  metadata: JSON
+}
+
+type Query {
+  # Queue queries
+  queue(queueId: ID!): PriorityQueue
+  queueByAsset(assetContractId: String!): PriorityQueue
+  queues(limit: Int, offset: Int): [PriorityQueue!]!
+  
+  # Entry queries
+  queueEntry(entryId: ID!): QueueEntry
+  queueEntries(queueId: ID!, status: QueueEntryStatus, limit: Int, offset: Int): [QueueEntry!]!
+  
+  # Event queries
+  queueEvents(queueId: ID!, limit: Int): [QueueEvent!]!
+  
+  # Analytics queries
+  queueAnalytics(queueId: ID!, snapshotDate: String): QueueAnalytics
+  
+  # Governance queries
+  governanceRules(queueId: ID!): [GovernanceRule!]!
+  queueCompliance(entryId: ID!): QueueCompliance!
+  
+  # Notification queries
+  pendingNotifications(userWalletAddress: String!): [AllocationNotification!]!
+  
+  # Whitelist queries
+  walletStatus(walletAddress: String!): WalletStatus!
+  whitelistDetails(limit: Int, offset: Int): WhitelistDetails!
+  blacklistDetails(limit: Int, offset: Int): BlacklistDetails!
+  whitelistStatistics: WhitelistStatistics!
+  
+  # Configuration queries
+  priorityTiers: JSON!
+  allocationAlgorithms: [AllocationAlgorithm!]!
+}
+
+type Mutation {
+  # Queue mutations
+  createQueue(input: CreateQueueInput!): PriorityQueue!
+  updateQueue(queueId: ID!, input: UpdateQueueInput!): PriorityQueue!
+  openQueue(queueId: ID!): PriorityQueue!
+  closeQueue(queueId: ID!): PriorityQueue!
+  
+  # Entry mutations
+  joinQueue(input: JoinQueueInput!): QueueEntry!
+  leaveQueue(entryId: ID!): LeaveQueueResult!
+  
+  # Allocation mutations
+  runAllocation(queueId: ID!): AllocationRunResult!
+  adjustPriorityScores(queueId: ID!, input: PriorityAdjustmentInput!): PriorityAdjustmentResult!
+  
+  # Analytics mutations
+  generateAnalyticsSnapshot(queueId: ID!): QueueAnalytics!
+  
+  # Governance mutations
+  addGovernanceRule(input: AddGovernanceRuleInput!): GovernanceRule!
+  
+  # Whitelist mutations
+  addToWhitelist(input: AddToWhitelistInput!): WalletWhitelistEntry!
+  removeFromWhitelist(walletAddress: String!): WhitelistOperationResult!
+  addToBlacklist(walletAddress: String!, reason: String): WalletBlacklistEntry!
+  removeFromBlacklist(walletAddress: String!): BlacklistOperationResult!
+  bulkAddToWhitelist(input: BulkWhitelistInput!): BulkWhitelistResult!
+  updateWalletTier(walletAddress: String!, tierId: String!): WalletStatus!
+}
+
+type LeaveQueueResult {
+  success: Boolean!
+  entryId: ID!
+}
+
+type AllocationRunResult {
+  allocations: [AllocationResult!]!
+  count: Int!
+}
+
+type PriorityAdjustmentResult {
+  success: Boolean!
+  message: String!
+}
+
+type WhitelistOperationResult {
+  walletAddress: String!
+  whitelisted: Boolean!
+}
+
+type BlacklistOperationResult {
+  walletAddress: String!
+  blacklisted: Boolean!
+}
+
+type WhitelistDetails {
+  wallets: [WalletWhitelistEntry!]!
+  pagination: PaginationInfo!
+}
+
+type BlacklistDetails {
+  wallets: [WalletBlacklistEntry!]!
+  pagination: PaginationInfo!
+}
+
+type WhitelistStatistics {
+  totalWhitelisted: Int!
+  totalBlacklisted: Int!
+  tierDistribution: JSON!
+}
+
+type BulkWhitelistResult {
+  results: [BulkWhitelistItemResult!]!
+}
+
+type BulkWhitelistItemResult {
+  walletAddress: String!
+  success: Boolean!
+  result: JSON
+  error: String
+}
+
+type PaginationInfo {
+  total: Int!
+  limit: Int!
+  offset: Int!
+}
+
+scalar JSON
