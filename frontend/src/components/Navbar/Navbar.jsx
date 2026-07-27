@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useComparisonStore } from '../../store/useComparisonStore';
 import styles from './Navbar.module.css';
 
 const NAV_ITEMS = [
@@ -37,6 +38,24 @@ const NAV_ITEMS = [
     ),
   },
   {
+    id: 'compare',
+    label: 'Compare',
+    icon: (
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <rect x="3" y="3" width="8" height="18" rx="1" />
+        <rect x="13" y="3" width="8" height="18" rx="1" />
+      </svg>
+    ),
+    badge: true,
+  },
+  {
     id: 'admin',
     label: 'Admin',
     icon: (
@@ -60,9 +79,16 @@ const NAV_ITEMS = [
     id: 'profile',
     label: 'Profile',
     icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-        <circle cx="12" cy="7" r="4"></circle>
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+        <circle cx="12" cy="7" r="4" />
       </svg>
     ),
   },
@@ -71,6 +97,7 @@ const NAV_ITEMS = [
 export default function Navbar({ activeView, onNavigate }) {
   const [open, setOpen] = useState(false);
   const drawerRef = useRef(null);
+  const { comparedAssets } = useComparisonStore();
 
   // Close drawer on outside click
   useEffect(() => {
@@ -103,15 +130,28 @@ export default function Navbar({ activeView, onNavigate }) {
     <nav className={styles.navbar} aria-label="Main navigation">
       {/* Desktop horizontal links */}
       <ul className={styles.desktopNav} role="list">
-        {NAV_ITEMS.map(({ id, label, icon }) => (
+        {NAV_ITEMS.map(({ id, label, icon, badge }) => (
           <li key={id}>
             <button
               className={`${styles.navItem} ${activeView === id ? styles.active : ''}`}
               onClick={() => handleNav(id)}
               aria-current={activeView === id ? 'page' : undefined}
+              title={
+                id === 'compare' && comparedAssets.length > 0
+                  ? `${comparedAssets.length} asset${comparedAssets.length !== 1 ? 's' : ''} selected`
+                  : undefined
+              }
             >
               <span className={styles.navIcon}>{icon}</span>
               {label}
+              {badge && comparedAssets.length > 0 && (
+                <span
+                  className={styles.badge}
+                  aria-label={`${comparedAssets.length} assets selected for comparison`}
+                >
+                  {comparedAssets.length}
+                </span>
+              )}
             </button>
           </li>
         ))}
@@ -143,16 +183,29 @@ export default function Navbar({ activeView, onNavigate }) {
         aria-hidden={!open}
       >
         <ul className={styles.drawerNav} role="list">
-          {NAV_ITEMS.map(({ id, label, icon }) => (
+          {NAV_ITEMS.map(({ id, label, icon, badge }) => (
             <li key={id}>
               <button
                 className={`${styles.drawerItem} ${activeView === id ? styles.active : ''}`}
                 onClick={() => handleNav(id)}
                 aria-current={activeView === id ? 'page' : undefined}
                 tabIndex={open ? 0 : -1}
+                title={
+                  id === 'compare' && comparedAssets.length > 0
+                    ? `${comparedAssets.length} asset${comparedAssets.length !== 1 ? 's' : ''} selected`
+                    : undefined
+                }
               >
                 <span className={styles.navIcon}>{icon}</span>
                 {label}
+                {badge && comparedAssets.length > 0 && (
+                  <span
+                    className={styles.badge}
+                    aria-label={`${comparedAssets.length} assets selected for comparison`}
+                  >
+                    {comparedAssets.length}
+                  </span>
+                )}
               </button>
             </li>
           ))}
