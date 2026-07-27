@@ -4,6 +4,8 @@ import Card from '../Card/Card';
 import PriceHistoryModal from '../PriceHistoryChart/PriceHistoryModal';
 import { useComparisonStore } from '../../store/useComparisonStore';
 import { useFavoritesStore } from '../../store/useFavoritesStore';
+import PulsingDot from '../PulsingDot/PulsingDot';
+import LiveBadge from '../LiveBadge/LiveBadge';
 import styles from './AssetCard.module.css';
 
 /**
@@ -19,8 +21,9 @@ import styles from './AssetCard.module.css';
  * @param {string}  asset.totalValuation - Valuation string
  * @param {string}  asset.contractId - On-chain contract ID
  * @param {string}  asset.assetType  - Type of asset
+ * @param {boolean} isLive           - Whether the asset is receiving live updates
  */
-function AssetCard({ asset }) {
+function AssetCard({ asset, isLive = false }) {
   const [showPriceHistory, setShowPriceHistory] = useState(false);
 
   if (!asset) return null;
@@ -152,11 +155,27 @@ function AssetCard({ asset }) {
         )}
 
         <div className={styles.body}>
-          {assetType && (
-            <span className={styles.assetType}>{assetType}</span>
-          )}
+          <div className={styles.headerRow}>
+            {assetType && (
+              <span className={styles.assetType}>{assetType}</span>
+            )}
+            {isLive && (
+              <LiveBadge variant="price" animated tooltip="Live price updates" />
+            )}
+          </div>
 
-          <h3 className={styles.title}>{title || 'Untitled Asset'}</h3>
+          <h3 className={styles.title}>
+            {title || 'Untitled Asset'}
+            {isLive && (
+              <PulsingDot
+                color="success"
+                size="sm"
+                animated
+                tooltip="Receiving live updates"
+                ariaLabel={`${title || 'Asset'} is receiving live updates`}
+              />
+            )}
+          </h3>
 
           {location && (
             <p className={styles.location}>
