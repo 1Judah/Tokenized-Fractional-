@@ -53,91 +53,27 @@ export default function ErrorFallback({
   return (
     <div className={styles.container}>
       <div className={styles.card}>
-        <div className={styles.iconWrapper} style={{ backgroundColor: `${config.color}20` }}>
-          <span className={styles.icon} style={{ fontSize: '2rem' }}>
-            {config.icon}
-          </span>
-        </div>
-
-        <h2 className={styles.title}>{config.title}</h2>
-
-        <p className={styles.subtitle}>{helpText}</p>
-
-        {/* Route context */}
-        {routeName && (
-          <p className={styles.context}>
-            Error location: <strong>{routeName}</strong>
-          </p>
-        )}
-
-        {/* Error ID for support reference */}
-        {errorId && (
-          <p className={styles.errorId}>
-            Error ID: <code>{errorId}</code>
-            <button
-              onClick={() => {
-                navigator.clipboard.writeText(errorId);
-              }}
-              title="Copy error ID"
-              className={styles.copyButton}
-              aria-label="Copy error ID to clipboard"
-            >
-              📋
-            </button>
-          </p>
-        )}
-
-        {/* Timestamp */}
-        {timestamp && (
-          <p className={styles.timestamp}>
-            Occurred: {new Date(timestamp).toLocaleString()}
-          </p>
-        )}
-
-        {/* Development-only error details */}
-        {isDev && error && (
-          <details className={styles.devDetails}>
-            <summary>Error Details (Development Only)</summary>
-            <div className={styles.devContent}>
-              <div className={styles.errorMessage}>
-                <strong>Message:</strong>
-                <pre>{errorMessage}</pre>
-              </div>
-              {componentStack && (
-                <div className={styles.componentStack}>
-                  <strong>Component Stack:</strong>
-                  <pre>{componentStack}</pre>
-                </div>
-              )}
-              {error?.stack && (
-                <div className={styles.stackTrace}>
-                  <strong>Stack Trace:</strong>
-                  <pre>{error.stack}</pre>
-                </div>
-              )}
-            </div>
-          </details>
-        )}
-
-        {/* Action buttons */}
-        <div className={styles.actions}>
-          <button onClick={resetError} className={`${styles.button} ${styles.primary}`}>
-            {TRY_AGAIN}
-          </button>
-          <button
-            onClick={() => {
-              window.location.href = '/';
-            }}
-            className={`${styles.button} ${styles.secondary}`}
+        <div className={styles.iconWrapper}>
+          <svg
+            width="40"
+            height="40"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
           >
-            Go to Home
-          </button>
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="8" x2="12" y2="12" />
+            <line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
         </div>
-
-        {/* Support info */}
-        <p className={styles.support}>
-          If the error persists, please contact support and reference your error ID above.
-        </p>
+        <h2 className={styles.title}>{UNEXPECTED_ERROR}</h2>
+        <p className={styles.subtitle}>{ERROR_REPORTED}</p>
+        <button onClick={resetError} className={styles.button}>
+          {TRY_AGAIN}
+        </button>
       </div>
     </div>
   );

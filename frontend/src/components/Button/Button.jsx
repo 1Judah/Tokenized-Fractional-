@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { memo } from 'react';
 import styles from './Button.module.css';
 
-export default function Button({
+function Button({
   children,
   variant = 'primary',
   disabled = false,
@@ -27,3 +27,5 @@ export default function Button({
     </button>
   );
 }
+
+export default memo(Button);

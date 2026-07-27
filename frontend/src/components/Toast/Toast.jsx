@@ -1,6 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { Networks } from '@stellar/stellar-sdk';
 import { useToastStore } from '../../store/useToastStore';
 import styles from './Toast.module.css';
+
+const NETWORK_PASSPHRASE = import.meta.env.VITE_NETWORK_PASSPHRASE || Networks.TESTNET;
+const EXPLORER_NETWORK = NETWORK_PASSPHRASE === Networks.PUBLIC ? 'public' : 'testnet';
+
+function explorerUrl(hash) {
+  return `https://stellar.expert/explorer/${EXPLORER_NETWORK}/tx/${hash}`;
+}
 
 const AUTO_DISMISS_MS = {
   success: 5000,
@@ -74,7 +82,22 @@ function ToastItem({ toast }) {
       <div className={styles.body}>
         <p className={styles.message}>{toast.message}</p>
         {toast.txHash && (
-          <p className={styles.txHash}>Tx: {toast.txHash}</p>
+          <p className={styles.txHash}>
+            <a
+              href={explorerUrl(toast.txHash)}
+              target="_blank"
+              rel="noreferrer noopener"
+              className={styles.txHashLink}
+              title={toast.txHash}
+            >
+              Tx: {toast.txHash.slice(0, 8)}…{toast.txHash.slice(-6)}
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginLeft: 3, verticalAlign: 'middle' }}>
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                <polyline points="15 3 21 3 21 9" />
+                <line x1="10" y1="14" x2="21" y2="3" />
+              </svg>
+            </a>
+          </p>
         )}
       </div>
       <button className={styles.closeBtn} onClick={dismiss} aria-label="Dismiss">

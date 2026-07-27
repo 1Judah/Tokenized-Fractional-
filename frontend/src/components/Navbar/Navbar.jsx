@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useComparisonStore } from '../../store/useComparisonStore';
 import styles from './Navbar.module.css';
 
 const NAV_ITEMS = [
@@ -6,7 +7,14 @@ const NAV_ITEMS = [
     id: 'marketplace',
     label: 'Home',
     icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
         <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
         <polyline points="9 22 9 12 15 12 15 22" />
       </svg>
@@ -16,27 +24,49 @@ const NAV_ITEMS = [
     id: 'portfolio',
     label: 'Portfolio',
     icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
         <rect x="2" y="7" width="20" height="14" rx="2" ry="2" />
         <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2" />
       </svg>
     ),
   },
   {
-    id: 'history',
-    label: 'History',
+    id: 'compare',
+    label: 'Compare',
     icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="12" cy="12" r="10" />
-        <polyline points="12 6 12 12 16 14" />
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <rect x="3" y="3" width="8" height="18" rx="1" />
+        <rect x="13" y="3" width="8" height="18" rx="1" />
       </svg>
     ),
+    badge: true,
   },
   {
     id: 'admin',
     label: 'Admin',
     icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
         <circle cx="12" cy="8" r="4" />
         <path d="M20 21a8 8 0 1 0-16 0" />
         <circle cx="19" cy="19" r="3" />
@@ -45,11 +75,29 @@ const NAV_ITEMS = [
       </svg>
     ),
   },
+  {
+    id: 'profile',
+    label: 'Profile',
+    icon: (
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+        <circle cx="12" cy="7" r="4" />
+      </svg>
+    ),
+  },
 ];
 
 export default function Navbar({ activeView, onNavigate }) {
   const [open, setOpen] = useState(false);
   const drawerRef = useRef(null);
+  const { comparedAssets } = useComparisonStore();
 
   // Close drawer on outside click
   useEffect(() => {
@@ -66,7 +114,9 @@ export default function Navbar({ activeView, onNavigate }) {
   // Close drawer on Escape
   useEffect(() => {
     if (!open) return;
-    const handler = (e) => { if (e.key === 'Escape') setOpen(false); };
+    const handler = (e) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, [open]);
@@ -80,15 +130,28 @@ export default function Navbar({ activeView, onNavigate }) {
     <nav className={styles.navbar} aria-label="Main navigation">
       {/* Desktop horizontal links */}
       <ul className={styles.desktopNav} role="list">
-        {NAV_ITEMS.map(({ id, label, icon }) => (
+        {NAV_ITEMS.map(({ id, label, icon, badge }) => (
           <li key={id}>
             <button
               className={`${styles.navItem} ${activeView === id ? styles.active : ''}`}
               onClick={() => handleNav(id)}
               aria-current={activeView === id ? 'page' : undefined}
+              title={
+                id === 'compare' && comparedAssets.length > 0
+                  ? `${comparedAssets.length} asset${comparedAssets.length !== 1 ? 's' : ''} selected`
+                  : undefined
+              }
             >
               <span className={styles.navIcon}>{icon}</span>
               {label}
+              {badge && comparedAssets.length > 0 && (
+                <span
+                  className={styles.badge}
+                  aria-label={`${comparedAssets.length} assets selected for comparison`}
+                >
+                  {comparedAssets.length}
+                </span>
+              )}
             </button>
           </li>
         ))}
@@ -120,16 +183,29 @@ export default function Navbar({ activeView, onNavigate }) {
         aria-hidden={!open}
       >
         <ul className={styles.drawerNav} role="list">
-          {NAV_ITEMS.map(({ id, label, icon }) => (
+          {NAV_ITEMS.map(({ id, label, icon, badge }) => (
             <li key={id}>
               <button
                 className={`${styles.drawerItem} ${activeView === id ? styles.active : ''}`}
                 onClick={() => handleNav(id)}
                 aria-current={activeView === id ? 'page' : undefined}
                 tabIndex={open ? 0 : -1}
+                title={
+                  id === 'compare' && comparedAssets.length > 0
+                    ? `${comparedAssets.length} asset${comparedAssets.length !== 1 ? 's' : ''} selected`
+                    : undefined
+                }
               >
                 <span className={styles.navIcon}>{icon}</span>
                 {label}
+                {badge && comparedAssets.length > 0 && (
+                  <span
+                    className={styles.badge}
+                    aria-label={`${comparedAssets.length} assets selected for comparison`}
+                  >
+                    {comparedAssets.length}
+                  </span>
+                )}
               </button>
             </li>
           ))}

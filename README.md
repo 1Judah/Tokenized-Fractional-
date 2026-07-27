@@ -1,5 +1,7 @@
 # Tokenized Fractional Real-World Assets (RWA) Marketplace
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A full-stack decentralized application (dApp) built on the **Stellar Network** using **Soroban Smart Contracts**. This marketplace allows administrators to tokenize real-world assets into fractional shares for users to purchase.
 
 ## Walkthrough Demo
@@ -93,6 +95,18 @@ graph TB
 ## Documentation
 
 - [Architecture Overview & Diagrams](docs/architecture.md)
+- [Architecture Decision Records (ADRs)](docs/adr/README.md) — Technical decisions and rationale
+- [Security Best Practices Guide](docs/security.md) — Security guidelines, audit checklist, and incident response
+- [Performance Benchmarks](docs/performance.md) — Gas costs, API latency, frontend metrics
+- [CDN Configuration](docs/cdn.md) — Serve frontend assets and uploaded media through Cloudflare
+- [Troubleshooting Guide](docs/troubleshooting.md) — Common issues and solutions
+- [Multi-Region Deployment](docs/multi-region-deployment.md) — Deployment strategy and failover
+- [Kubernetes Deployment](docs/kubernetes-deployment.md) — Kubernetes manifests, scaling, and self-healing
+- [Database Backup & Restore](docs/backups.md) — Automated backups, S3 offsite storage, retention, and disaster recovery
+- [NFT Certificates](docs/NFT_CERTIFICATES.md)
+- [NFT Quickstart](docs/NFT_QUICKSTART.md)
+- [FAQ](docs/FAQ.md)
+- [Contributors Spotlight](CONTRIBUTORS.md) — Recognize the people who make this project possible
 
 ## Prerequisites
 
@@ -173,6 +187,8 @@ VITE_CONTRACT_ID=<YOUR_CONTRACT_ID>
 VITE_RPC_URL=https://soroban-testnet.stellar.org:443
 VITE_NETWORK_PASSPHRASE="Test SDF Network ; September 2015"
 VITE_API_URL=http://localhost:3001
+# Optional production CDN for built frontend assets
+# VITE_CDN_URL=https://cdn.example.com
 ```
 
 **Backend** — copy and fill in `backend/.env.example` as `backend/.env`:
@@ -182,6 +198,9 @@ PORT=3001
 CORS_ORIGINS=http://localhost:5173
 ADMIN_API_KEY=<generate-a-strong-random-key>
 DATA_FILE=data.json
+# Optional CDN for relative image/document metadata URLs
+# CDN_URL=https://cdn.example.com
+# ASSET_CDN_URL=https://assets-cdn.example.com
 ```
 
 ### 6. Run the Application
@@ -218,7 +237,8 @@ This will start an Nginx server on `http://localhost:80` that proxies requests:
 | Function | Description | Auth |
 |---|---|---|
 | `init` | Initialize marketplace | Admin |
-| `buy_shares` | Purchase fractional shares | Buyer |
+| `buy_shares` | Purchase fractional shares (mints NFT certificate per share if configured) | Buyer |
+| `set_nft_contract` | Configure NFT contract for certificate minting | Admin |
 | `get_shares` | Query user balance | None |
 | `get_available_shares` | Query remaining shares | None |
 | `get_total_shares` | Query total shares | None |
@@ -228,6 +248,12 @@ This will start an Nginx server on `http://localhost:80` that proxies requests:
 | `unpause` | Unpause marketplace | Admin |
 | `emergency_withdraw` | Withdraw tokens from contract | Admin |
 
+### NFT Share Certificates
+
+When users buy shares, they receive **SEP-41 compliant NFT certificates** representing their ownership. These NFTs can be viewed in wallets, transferred peer-to-peer, and traded on secondary marketplaces.
+
+👉 **[See NFT Certificates Documentation](docs/NFT_CERTIFICATES.md)** for setup, deployment, and integration details.
+
 ## Backend API
 
 | Method | Endpoint | Auth | Description |
@@ -236,6 +262,7 @@ This will start an Nginx server on `http://localhost:80` that proxies requests:
 | `GET` | `/api/rwa` | No | List all assets |
 | `GET` | `/api/rwa/:contractId` | No | Get asset metadata |
 | `POST` | `/api/rwa` | `x-api-key` | Create/update asset |
+| `PATCH` | `/api/rwa/:contractId` | `x-api-key` | Partial update (specific fields only) |
 | `DELETE` | `/api/rwa/:contractId` | `x-api-key` | Delete asset |
 
 Interactive API documentation is available at [`/api-docs`](http://localhost:3001/api-docs) (Swagger UI) and [`/api-docs.json`](http://localhost:3001/api-docs.json) (raw OpenAPI spec) when the backend is running.
@@ -243,6 +270,8 @@ Interactive API documentation is available at [`/api-docs`](http://localhost:300
 ## Cloud Deployment (Render)
 
 This project includes a [`render.yaml`](./render.yaml) Blueprint for one-click deployment to [Render](https://render.com).
+
+For zero-downtime releases, the repository now includes a blue-green deployment workflow described in [docs/blue-green-deployment.md](docs/blue-green-deployment.md). It uses paired blue and green services, health checks before traffic switches, and rollback support.
 
 ### Services deployed
 
@@ -283,3 +312,7 @@ cd frontend && npm run deploy
 ```
 
 > **Note:** Free-tier Render services spin down after inactivity. Upgrade to a paid plan for always-on availability.
+
+## Contributors
+
+We appreciate all contributions! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the full contributor spotlight. To contribute, please review [CONTRIBUTING.md](CONTRIBUTING.md).
