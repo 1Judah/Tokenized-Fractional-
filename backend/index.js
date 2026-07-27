@@ -13,7 +13,8 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import swaggerUi from 'swagger-ui-express';
 import { swaggerSpec } from './docs.js';
-import { cacheGet, cacheSet, cacheDel } from './cache.js';
+import { cacheGet, cacheSet, cacheDel, buildTlsOptions } from './cache.js';
+import { initScheduler, getSchedulerStatus, runConsistencyCheck } from './consistency-scheduler.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3001;
@@ -154,6 +155,78 @@ app.get('/api/admin/verify', adminAuth, (_req, res) => {
   res.json({ ok: true });
 });
 
+/**
+ * @openapi
+ * /api/admin/consistency:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Run manual data consistency check
+ *     description: |
+ *       Triggers an on-demand consistency check across all RWA assets,
+ *       comparing cache, database, and blockchain state.
+ *       Requires admin API key.
+ *     security:
+ *       - ApiKeyAuth: []
+ *     responses:
+ *       200:
+ *         description: Consistency check result
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 summary:
+ *                   type: object
+ *                   description: Aggregated consistency summary
+ *                 reports:
+ *                   type: array
+ *                   description: Per-contract consistency reports
+ *       401:
+ *         description: Unauthorized
+ */
+app.get('/api/admin/consistency', adminAuth, async (_req, res) => {
+  try {
+    const result = await runConsistencyCheck({ loadDataFn: loadData, cacheFn: cacheGet });
+    res.json(result);
+  } catch (err) {
+    logger.error({ err }, 'Consistency check endpoint error');
+    res.status(500).json({ error: 'Consistency check failed', details: err.message });
+  }
+});
+
+/**
+ * @openapi
+ * /api/admin/consistency/status:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Get consistency check scheduler status
+ *     description: Returns the current state of the periodic consistency check scheduler.
+ *     security:
+ *       - ApiKeyAuth: []
+ *     responses:
+ *       200:
+ *         description: Scheduler status
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 enabled:
+ *                   type: boolean
+ *                 running:
+ *                   type: boolean
+ *                 intervalMinutes:
+ *                   type: number
+ *                 autoRepairEnabled:
+ *                   type: boolean
+ *       401:
+ *         description: Unauthorized
+ */
+app.get('/api/admin/consistency/status', adminAuth, (_req, res) => {
+  const status = getSchedulerStatus();
+  res.json(status);
+});
+
 // ── v1 Router ─────────────────────────────────────────────────────────────────
 const v1 = Router();
 
@@ -167,10 +240,15 @@ app.get('/health', async (_req, res) => {
   if (process.env.REDIS_URL) {
     try {
       const Redis = (await import('ioredis')).default;
+      // Reuse the same TLS options as the main cache client so the health
+      // check honours REDIS_TLS, REDIS_TLS_CA, REDIS_TLS_CERT, REDIS_TLS_KEY
+      // and REDIS_TLS_REJECT_UNAUTHORIZED.
+      const tlsOptions = buildTlsOptions();
       const pingClient = new Redis(process.env.REDIS_URL, {
         lazyConnect: true,
         connectTimeout: 2000,
         maxRetriesPerRequest: 0,
+        ...(tlsOptions && { tls: tlsOptions }),
       });
       await pingClient.connect();
       await pingClient.ping();
@@ -450,6 +528,10 @@ export { app };
 
 if (process.env.NODE_ENV !== 'test') {
   import('./cache.js').then(({ initClient }) => initClient());
+  
+  // Initialize consistency check scheduler
+  initScheduler({ loadDataFn: loadData, cacheFn: cacheGet });
+  
   app.listen(PORT, () => {
     logger.info({ port: PORT }, 'RWA Off-chain Metadata Backend started');
   });

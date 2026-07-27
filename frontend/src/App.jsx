@@ -14,9 +14,12 @@ import Spinner from './components/Spinner/Spinner';
 import AssetGrid from './components/AssetGrid/AssetGrid';
 import AdminPage from './components/AdminPage/AdminPage';
 import PortfolioPage from './components/PortfolioPage/PortfolioPage';
+import TransactionHistory from './components/TransactionHistory/TransactionHistory';
 import ToastContainer from './components/Toast/Toast';
 import ConfirmPurchase from './components/ConfirmPurchase/ConfirmPurchase';
 import LanguageSwitcher from './components/LanguageSwitcher/LanguageSwitcher';
+import RouteErrorBoundary from './components/ErrorBoundary/RouteErrorBoundary';
+import AssetSkeleton from './components/AssetSkeleton/AssetSkeleton';
 import styles from './App.module.css';
 
 import { useWalletStore } from './store/useWalletStore';
@@ -147,6 +150,7 @@ function App() {
   const notifiedRef = useRef({});
 
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
+  const [view, setView] = useState('marketplace');
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -188,7 +192,7 @@ function App() {
   const buySharesTx = useSorobanWrite('buy_shares');
   const loadingBuy = buySharesTx.loading;
 
-  const { data: priceData } = useSorobanRead('get_price', [], { skip: CONTRACT_ID.length < 50 });
+  const { data: priceData, loading: loadingPrice } = useSorobanRead('get_price', [], { skip: CONTRACT_ID.length < 50 });
   const pricePerShare = priceData?.retval ? Number(priceData.retval.u64()) : null;
 
   useEffect(() => {
@@ -302,16 +306,22 @@ function App() {
       <ToastContainer />
 
       {view === 'portfolio' ? (
-        <PortfolioPage />
+        <RouteErrorBoundary routeName="Portfolio">
+          <PortfolioPage />
+        </RouteErrorBoundary>
       ) : view === 'admin' ? (
-        <AdminPage
-          publicKey={publicKey}
-          onDisconnect={() => setView('marketplace')}
-        />
+        <RouteErrorBoundary routeName="Admin">
+          <AdminPage
+            publicKey={publicKey}
+            onDisconnect={() => setView('marketplace')}
+          />
+        </RouteErrorBoundary>
       ) : view === 'history' ? (
-        <TransactionHistory />
+        <RouteErrorBoundary routeName="Transaction History">
+          <TransactionHistory />
+        </RouteErrorBoundary>
       ) : (
-        <>
+        <RouteErrorBoundary routeName="Marketplace">
       {/* Wallet errors (connection issues) */}
       {walletError && (
         <Alert variant="error">
@@ -327,16 +337,8 @@ function App() {
       )}
 
       {/* ── Asset Metadata Card ─────────────────────────────────────────── */}
-      {loadingMeta ? (
-        <Card>
-          <div className={styles.assetImageWrapper}>
-            <Skeleton variant="rect" height="100%" style={{ borderRadius: 'var(--radius-sm)' }} />
-          </div>
-          <Skeleton variant="text" height="1.4em" width="55%" style={{ marginBottom: 'var(--spacing-xs)' }} />
-          <Skeleton variant="text" height="1em" width="35%" style={{ marginBottom: 'var(--spacing-sm)' }} />
-          <Skeleton variant="text" lines={3} style={{ marginBottom: 'var(--spacing-md)' }} />
-          <Skeleton variant="text" height="1.1em" width="40%" />
-        </Card>
+      {loadingMeta || loadingPrice || loadingShares ? (
+        <AssetSkeleton />
       ) : assetMeta ? (
         <Card hoverable>
           {assetMeta.imageUrl && (
@@ -408,7 +410,7 @@ function App() {
           )}
         </Card>
       )}
-        </>
+        </RouteErrorBoundary>
       )}
 
       {confirmPending && (
