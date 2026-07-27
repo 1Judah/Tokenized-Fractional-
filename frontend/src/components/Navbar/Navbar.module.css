@@ -48,6 +48,21 @@
   height: 16px;
 }
 
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: var(--font-weight-bold);
+  color: white;
+  background: var(--primary);
+  border-radius: 10px;
+  margin-left: var(--spacing-xs);
+}
+
 /* ── Hamburger button (mobile only) ─────────────────── */
 .hamburger {
   display: none;
@@ -144,6 +159,14 @@
 .drawerItem .navIcon svg {
   width: 18px;
   height: 18px;
+}
+
+.drawerItem .badge {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 8px;
+  font-size: 12px;
+  margin-left: auto;
 }
 
 /* ── Responsive breakpoint ───────────────────────────── */

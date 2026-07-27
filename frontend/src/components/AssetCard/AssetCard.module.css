@@ -112,6 +112,13 @@
   flex: 1;
 }
 
+.headerRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
 .assetType {
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-semibold);
@@ -126,6 +133,9 @@
   color: var(--text-primary);
   line-height: 1.3;
   margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
 }
 
 .location {

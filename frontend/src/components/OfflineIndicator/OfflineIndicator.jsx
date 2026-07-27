@@ -1,30 +1,25 @@
-// Copyright (c) 2026 Tokenized Fractional RWA Marketplace Contributors
-// SPDX-License-Identifier: MIT
-
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { getQueueStats } from '../../services/offlineQueue';
 import styles from './OfflineIndicator.module.css';
 
-/**
- * OfflineIndicator
- *
- * Shows a persistent banner when the user is offline and a brief
- * "back online" toast when connectivity is restored.
- */
 export default function OfflineIndicator() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [showReconnected, setShowReconnected] = useState(false);
+  const [pendingActions, setPendingActions] = useState(0);
+  const [offlineMode, setOfflineMode] = useState(false);
 
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
       setShowReconnected(true);
-      // Auto-dismiss the "back online" message after 3 s
+      setOfflineMode(false);
       const t = setTimeout(() => setShowReconnected(false), 3000);
       return () => clearTimeout(t);
     };
 
     const handleOffline = () => {
       setIsOnline(false);
+      setOfflineMode(true);
       setShowReconnected(false);
     };
 
@@ -37,6 +32,27 @@ export default function OfflineIndicator() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!offlineMode) return;
+
+    const pollStats = async () => {
+      try {
+        const stats = await getQueueStats();
+        setPendingActions(stats.pending);
+      } catch {
+        // silently fail
+      }
+    };
+
+    pollStats();
+    const interval = setInterval(pollStats, 5000);
+    return () => clearInterval(interval);
+  }, [offlineMode]);
+
+  const handleDismissReconnected = useCallback(() => {
+    setShowReconnected(false);
+  }, []);
+
   if (isOnline && !showReconnected) return null;
 
   return (
@@ -47,7 +63,7 @@ export default function OfflineIndicator() {
       className={isOnline ? styles.reconnected : styles.offline}
     >
       {isOnline ? (
-        <>
+        <div className={styles.bannerContent}>
           <svg
             className={styles.icon}
             width="16"
@@ -62,10 +78,26 @@ export default function OfflineIndicator() {
           >
             <polyline points="20 6 9 17 4 12" />
           </svg>
-          Back online
-        </>
+          <span>Back online</span>
+          {pendingActions > 0 && (
+            <span className={styles.syncInfo}>
+              Syncing {pendingActions} pending action{pendingActions !== 1 ? 's' : ''}...
+            </span>
+          )}
+          <button
+            type="button"
+            className={styles.dismissBtn}
+            onClick={handleDismissReconnected}
+            aria-label="Dismiss"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
       ) : (
-        <>
+        <div className={styles.bannerContent}>
           <svg
             className={styles.icon}
             width="16"
@@ -86,8 +118,14 @@ export default function OfflineIndicator() {
             <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
             <line x1="12" y1="20" x2="12.01" y2="20" />
           </svg>
-          You are offline — showing cached data
-        </>
+          <span className={styles.offlineLabel}>Offline Mode</span>
+          <span className={styles.offlineDesc}>Showing cached data</span>
+          {pendingActions > 0 && (
+            <span className={styles.queueInfo}>
+              {pendingActions} action{pendingActions !== 1 ? 's' : ''} queued
+            </span>
+          )}
+        </div>
       )}
     </div>
   );

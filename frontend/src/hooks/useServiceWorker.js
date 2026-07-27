@@ -1,40 +1,20 @@
-// Copyright (c) 2026 Tokenized Fractional RWA Marketplace Contributors
-// SPDX-License-Identifier: MIT
+import { useState, useEffect, useCallback } from 'react';
 
-/**
- * src/hooks/useServiceWorker.js
- *
- * Registers the Workbox service worker via the vite-plugin-pwa virtual module
- * and provides update state so the app can prompt users to refresh.
- *
- * Uses dynamic import so the module is only loaded when service workers are
- * supported (production builds), falling back gracefully in dev/test.
- */
+let onlineOverride = null;
 
-import { useState, useEffect } from 'react';
-
-/**
- * @typedef {Object} SWState
- * @property {boolean} needsUpdate - A new SW version is waiting to activate.
- * @property {Function} updateSW   - Call to skip waiting and reload the page.
- */
-
-/**
- * @returns {SWState}
- */
 export function useServiceWorker() {
   const [needsUpdate, setNeedsUpdate] = useState(false);
   const [updateSWFn, setUpdateSWFn] = useState(null);
+  const [offlineReady, setOfflineReady] = useState(false);
+  const [registration, setRegistration] = useState(null);
 
   useEffect(() => {
-    // Only register in production-like environments where SW is supported
     if (!('serviceWorker' in navigator)) return;
 
     let cancelled = false;
 
     (async () => {
       try {
-        // vite-plugin-pwa generates this virtual module at build time
         const { registerSW } = await import('virtual:pwa-register');
 
         const updateSW = registerSW({
@@ -42,14 +22,14 @@ export function useServiceWorker() {
             if (!cancelled) setNeedsUpdate(true);
           },
           onOfflineReady() {
-            // App is ready to work offline — we surface this via OfflineIndicator
+            if (!cancelled) setOfflineReady(true);
           },
-          onRegistered(registration) {
-            if (registration) {
-              // Poll for updates every 60 s when the page is visible
+          onRegistered(reg) {
+            if (reg) {
+              setRegistration(reg);
               setInterval(() => {
                 if (document.visibilityState === 'visible') {
-                  registration.update();
+                  reg.update();
                 }
               }, 60_000);
             }
@@ -58,15 +38,29 @@ export function useServiceWorker() {
 
         if (!cancelled) setUpdateSWFn(() => updateSW);
       } catch {
-        // Virtual module not available in dev or test — silently skip
+        // silently skip
       }
     })();
 
     return () => { cancelled = true; };
   }, []);
 
+  const checkOfflineCache = useCallback(async () => {
+    if (!('caches' in window)) return false;
+    try {
+      const cache = await caches.open('api-rwa-v2');
+      const keys = await cache.keys();
+      return keys.length > 0;
+    } catch {
+      return false;
+    }
+  }, []);
+
   return {
     needsUpdate,
     updateSW: updateSWFn ?? (() => {}),
+    offlineReady,
+    registration,
+    checkOfflineCache,
   };
 }
