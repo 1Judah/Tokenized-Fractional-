@@ -22,8 +22,10 @@ import OptimizedImage from './components/OptimizedImage/OptimizedImage';
 import styles from './App.module.css';
 import Breadcrumbs from './components/Breadcrumbs/Breadcrumbs';
 import PriceRangeFilter from './components/PriceRangeFilter/PriceRangeFilter';
+import ConnectionStatusIndicator from './components/ConnectionStatusIndicator/ConnectionStatusIndicator';
 
 import { useWalletStore } from './store/useWalletStore';
+import useLiveUpdatesStore from './store/useLiveUpdatesStore';
 import {
   TX_CONFIRMED,
   TX_FAILED,
@@ -317,40 +319,64 @@ function App() {
   const { isOnline, queueStats, processQueue, cacheAndQueue } = useOfflineSync();
 
   // ── GraphQL Subscriptions Cache Integration (Issue #426) ──────────────────────
+  const markAssetLive = useLiveUpdatesStore((state) => state.markAssetLive);
+  const updateAssetTimestamp = useLiveUpdatesStore((state) => state.updateAssetTimestamp);
+
   const handleSubscriptionEvent = useCallback(
     (message) => {
       if (!message.type || !message.data) return;
 
       const cacheKey = `graphql:${message.type}`;
+      const contractId = message.data.contractId || message.data.vaultId || message.data.id;
 
       switch (message.type) {
         case WS_EVENT_TYPES.PRICE_UPDATED:
-          setQueryData(`${cacheKey}:price:${message.data.vaultId || message.data.contractId}`, {
+          setQueryData(`${cacheKey}:price:${contractId}`, {
             price: message.data.price,
             lastUpdated: Date.now(),
           });
+          // Mark asset as receiving live updates
+          if (contractId) {
+            markAssetLive(contractId);
+            updateAssetTimestamp(contractId);
+          }
           break;
 
         case WS_EVENT_TYPES.AVAILABILITY_CHANGED:
           applySubscriptionDelta(
-            `${cacheKey}:availability:${message.data.vaultId || message.data.contractId}`,
+            `${cacheKey}:availability:${contractId}`,
             {
               availableShares: message.data.availableShares,
               totalShares: message.data.totalShares,
             },
           );
+          // Mark asset as receiving live updates
+          if (contractId) {
+            markAssetLive(contractId);
+            updateAssetTimestamp(contractId);
+          }
           break;
 
         case WS_EVENT_TYPES.ASSET_UPDATED:
           setQueryData(
-            `${cacheKey}:asset:${message.data.contractId || message.data.id}`,
+            `${cacheKey}:asset:${contractId}`,
             message.data,
           );
+          // Mark asset as receiving live updates
+          if (contractId) {
+            markAssetLive(contractId);
+            updateAssetTimestamp(contractId);
+          }
           break;
 
         case WS_EVENT_TYPES.SHARE_PURCHASED:
           if (publicKey && message.data.buyerAddress !== publicKey) {
             console.log('Share purchase detected:', message.data);
+          }
+          // Mark asset as receiving live updates
+          if (contractId) {
+            markAssetLive(contractId);
+            updateAssetTimestamp(contractId);
           }
           break;
 
@@ -366,7 +392,7 @@ function App() {
           console.log('Unknown WebSocket event:', message.type);
       }
     },
-    [publicKey, addToast],
+    [publicKey, addToast, markAssetLive, updateAssetTimestamp],
   );
 
   // ── Keyboard shortcuts (Issue #194) ─────────────────────────────────────────
@@ -610,6 +636,10 @@ function App() {
           </div>
         </div>
         <div className={styles.walletArea}>
+          <ConnectionStatusIndicator
+            status={wsConnected ? 'connected' : 'disconnected'}
+            showLabel={false}
+          />
           <LanguageSwitcher />
           <button
             onClick={toggleTheme}
