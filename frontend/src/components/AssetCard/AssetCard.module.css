@@ -4,6 +4,12 @@
   padding: 0;
   overflow: hidden;
   height: 100%;
+  transition: transform var(--transition-normal), box-shadow var(--transition-normal);
+}
+
+.assetCard:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-lg), var(--shadow-glow);
 }
 
 .imageWrapper {
@@ -18,11 +24,73 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transition: transform var(--transition-normal);
+  transition: transform var(--transition-normal), opacity var(--transition-normal);
+  opacity: 0;
 }
 
-.assetCard:hover .image {
+.imageLoaded {
+  opacity: 1;
+}
+
+.assetCard:hover .imageLoaded {
   transform: scale(1.05);
+}
+
+.imageSkeleton {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, var(--bg-surface-hover) 25%, var(--bg-surface) 50%, var(--bg-surface-hover) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.imageOverlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity var(--transition-normal);
+  backdrop-filter: blur(4px);
+}
+
+.assetCard:hover .imageOverlay {
+  opacity: 1;
+}
+
+.quickViewBtn {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  transform: translateY(8px);
+  opacity: 0;
+}
+
+.assetCard:hover .quickViewBtn {
+  transform: translateY(0);
+  opacity: 1;
+}
+
+.quickViewBtn:hover {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
 }
 
 .imagePlaceholder {
@@ -79,14 +147,23 @@
   margin: 0;
 }
 
-.valuation {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-  color: var(--primary);
-  display: flex;
+.valuationBadge {
+  display: inline-flex;
   align-items: center;
   gap: var(--spacing-xs);
-  margin: 0;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
+  border-radius: var(--radius-sm);
+  color: var(--success-text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  width: fit-content;
+}
+
+.valuationAmount {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-bold);
 }
 
 .icon {
@@ -144,7 +221,6 @@
   background: rgba(0, 0, 0, 0.65);
 }
 
-/* Float version used when there's no image (inside imagePlaceholder) */
 .bookmarkBtnFloat {
   position: absolute;
   top: var(--spacing-sm);
@@ -255,8 +331,8 @@
 
 .actionButton {
   padding: var(--spacing-xs) var(--spacing-sm);
-  background: var(--primary-light, #dbeafe);
-  border: 1px solid var(--primary-border, #3b82f6);
+  background: var(--primary-light, var(--bg-surface-hover));
+  border: 1px solid var(--primary-border, var(--border-color));
   border-radius: var(--radius-sm);
   color: var(--primary);
   font-size: var(--font-size-sm);
@@ -272,13 +348,160 @@
 
 .actionButton:hover {
   background: var(--primary);
-  color: white;
+  color: #fff;
   transform: translateY(-1px);
   box-shadow: 0 2px 4px rgba(59, 130, 246, 0.2);
 }
 
 .actionButton:active {
   transform: translateY(0);
+}
+
+/* ── Quick View Modal ───────────────────────────────────────────────────── */
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10001;
+  padding: var(--spacing-md);
+  backdrop-filter: blur(4px);
+}
+
+.modalContent {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  max-width: 560px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: var(--shadow-lg);
+  animation: modalIn 0.2s ease-out;
+}
+
+@keyframes modalIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.modalHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--spacing-md) var(--spacing-lg);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.modalTitle {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.modalClose {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: var(--font-size-xl);
+  cursor: pointer;
+  padding: 0;
+  width: 2rem;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.modalClose:hover {
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+}
+
+.modalBody {
+  padding: var(--spacing-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.modalImage {
+  width: 100%;
+  height: 220px;
+  object-fit: cover;
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-hover);
+}
+
+.modalDetails {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.modalDetails p {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+.modalValuation {
+  color: var(--success-text) !important;
+  font-weight: var(--font-weight-semibold) !important;
+  font-size: var(--font-size-md) !important;
+}
+
+.modalContractId {
+  font-family: monospace;
+  font-size: var(--font-size-xs) !important;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.modalFooter {
+  display: flex;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-md) var(--spacing-lg);
+  border-top: 1px solid var(--border-color);
+  justify-content: flex-end;
+}
+
+.modalAction {
+  padding: var(--spacing-xs) var(--spacing-md);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.modalAction:hover {
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+}
+
+.modalActionPrimary {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+}
+
+.modalActionPrimary:hover {
+  background: var(--primary-hover);
 }
 
 @media (max-width: 768px) {

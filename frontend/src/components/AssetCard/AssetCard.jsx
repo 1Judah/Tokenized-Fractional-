@@ -12,7 +12,7 @@ import styles from './AssetCard.module.css';
  * AssetCard — displays a single RWA asset in a card format
  * with image, title, location, valuation, a "Buy Shares" action,
  * a Compare checkbox (issue #190), and a Bookmark/Favorite button (issue #187).
- * Also includes a price history chart view.
+ * Also includes a price history chart view and quick view modal.
  *
  * @param {Object}  asset            - Asset metadata object
  * @param {string}  asset.imageUrl   - URL to the asset image
@@ -21,10 +21,13 @@ import styles from './AssetCard.module.css';
  * @param {string}  asset.totalValuation - Valuation string
  * @param {string}  asset.contractId - On-chain contract ID
  * @param {string}  asset.assetType  - Type of asset
+ * @param {boolean} [asset.loading]  - Loading state for skeleton display
  * @param {boolean} isLive           - Whether the asset is receiving live updates
  */
 function AssetCard({ asset, isLive = false }) {
   const [showPriceHistory, setShowPriceHistory] = useState(false);
+  const [showQuickView, setShowQuickView] = useState(false);
+  const [imageLoaded, setImageLoaded] = useState(false);
 
   if (!asset) return null;
 
@@ -35,6 +38,7 @@ function AssetCard({ asset, isLive = false }) {
     totalValuation,
     contractId,
     assetType,
+    loading = false,
   } = asset;
 
   // ── Comparison (issue #190) ───────────────────────────────────────────────
@@ -66,11 +70,28 @@ function AssetCard({ asset, isLive = false }) {
     setShowPriceHistory(false);
   };
 
+  // ── Quick View ──────────────────────────────────────────────────────────
+  const handleOpenQuickView = (e) => {
+    e.stopPropagation();
+    setShowQuickView(true);
+  };
+
+  const handleCloseQuickView = () => {
+    setShowQuickView(false);
+  };
+
   return (
     <>
       <Card hoverable className={styles.assetCard}>
         {imageUrl ? (
           <div className={styles.imageWrapper}>
+            {!imageLoaded && <div className={styles.imageSkeleton} />}
+            <img
+              src={imageUrl}
+              alt={title || 'Asset'}
+              className={`${styles.image} ${imageLoaded ? styles.imageLoaded : ''}`}
+              loading="lazy"
+              onLoad={() => setImageLoaded(true)}
             <OptimizedImage
               src={imageUrl}
               alt={title || 'Asset'}
@@ -78,12 +99,30 @@ function AssetCard({ asset, isLive = false }) {
               sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 300px"
               ratio="4/3"
             />
+            {/* Hover overlay with quick actions */}
+            <div className={styles.imageOverlay}>
+              <button
+                className={styles.quickViewBtn}
+                onClick={handleOpenQuickView}
+                title="Quick view"
+                aria-label={`Quick view ${title || 'asset'}`}
+                type="button"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                  <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+                <span>Quick View</span>
+              </button>
+            </div>
+
             {/* Bookmark button overlaid on image */}
             <button
               className={`${styles.bookmarkBtn} ${favorited ? styles.bookmarkActive : ''}`}
               onClick={handleFavoriteClick}
               aria-label={favorited ? `Remove ${title || 'asset'} from favorites` : `Add ${title || 'asset'} to favorites`}
               title={favorited ? 'Remove from favorites' : 'Add to favorites'}
+              type="button"
             >
               <svg
                 width="16"
@@ -106,6 +145,7 @@ function AssetCard({ asset, isLive = false }) {
               onClick={handleOpenPriceHistory}
               title="View price history chart"
               aria-label={`View price history chart for ${title || 'asset'}`}
+              type="button"
             >
               <svg
                 width="16"
@@ -131,6 +171,7 @@ function AssetCard({ asset, isLive = false }) {
               onClick={handleFavoriteClick}
               aria-label={favorited ? `Remove ${title || 'asset'} from favorites` : `Add ${title || 'asset'} to favorites`}
               title={favorited ? 'Remove from favorites' : 'Add to favorites'}
+              type="button"
             >
               <svg
                 width="16"
@@ -188,13 +229,13 @@ function AssetCard({ asset, isLive = false }) {
           )}
 
           {totalValuation && (
-            <p className={styles.valuation}>
+            <div className={styles.valuationBadge}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={styles.icon} aria-hidden="true">
                 <line x1="12" y1="1" x2="12" y2="23"></line>
                 <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
               </svg>
-              {totalValuation}
-            </p>
+              <span className={styles.valuationAmount}>{totalValuation}</span>
+            </div>
           )}
 
           <div className={styles.footer}>
@@ -214,8 +255,20 @@ function AssetCard({ asset, isLive = false }) {
               onClick={handleOpenPriceHistory}
               title="View price history"
               aria-label={`View price history for ${title || 'asset'}`}
+              type="button"
             >
               📈 Price History
+            </button>
+
+            {/* Quick View button */}
+            <button
+              className={styles.actionButton}
+              onClick={handleOpenQuickView}
+              title="Quick view asset details"
+              aria-label={`Quick view ${title || 'asset'} details`}
+              type="button"
+            >
+              👁 Quick View
             </button>
 
             {/* ── Compare checkbox (issue #190) ───────────────────────────── */}
@@ -243,6 +296,52 @@ function AssetCard({ asset, isLive = false }) {
         onClose={handleClosePriceHistory}
         asset={asset}
       />
+
+      {/* Quick View Modal */}
+      {showQuickView && (
+        <div className={styles.modalOverlay} onClick={handleCloseQuickView}>
+          <div className={styles.modalContent} onClick={(e) => e.stopPropagation()}>
+            <div className={styles.modalHeader}>
+              <h3 className={styles.modalTitle}>{title || 'Asset Details'}</h3>
+              <button
+                className={styles.modalClose}
+                onClick={handleCloseQuickView}
+                aria-label="Close quick view"
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <div className={styles.modalBody}>
+              {imageUrl && (
+                <img src={imageUrl} alt={title || 'Asset'} className={styles.modalImage} />
+              )}
+              <div className={styles.modalDetails}>
+                {assetType && <p><strong>Type:</strong> {assetType}</p>}
+                {location && <p><strong>Location:</strong> {location}</p>}
+                {totalValuation && (
+                  <p className={styles.modalValuation}>
+                    <strong>Valuation:</strong> {totalValuation}
+                  </p>
+                )}
+                {contractId && (
+                  <p className={styles.modalContractId}>
+                    <strong>Contract:</strong> {contractId}
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className={styles.modalFooter}>
+              <button className={styles.modalAction} onClick={handleCloseQuickView} type="button">
+                Close
+              </button>
+              <button className={`${styles.modalAction} ${styles.modalActionPrimary}`} onClick={() => { handleCloseQuickView(); }} type="button">
+                Buy Shares
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
