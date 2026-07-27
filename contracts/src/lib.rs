@@ -11,7 +11,7 @@ use soroban_sdk::{
 // Off-chain tools (explorers, wallets, indexers) read these entries from
 // the Wasm custom section `contractmetav0` without executing the contract.
 contractmeta!(key = "name", val = "RWA Marketplace");
-contractmeta!(key = "version", val = "0.3.0");
+contractmeta!(key = "version", val = "0.4.0");
 contractmeta!(key = "description", val = "Tokenized Fractional RWA Marketplace");
 contractmeta!(key = "sep", val = "41");
 
@@ -100,6 +100,21 @@ pub enum DataKey {
     LastSnapshotLedger,
     /// Number of snapshots taken
     SnapshotCount,
+    // ── Issue #270: Whitelist enhancements ──────────────────────────────
+    /// Unix timestamp when whitelist entry expires (0 = never)
+    WhitelistExpiry(Address),
+    /// Whitelist tier: 0 = standard, 1 = premium, 2 = institutional
+    WhitelistTier(Address),
+    // ── Issue #263: Transfer fee mechanism ─────────────────────────────
+    /// Transfer fee in basis points (e.g. 30 = 0.30%)
+    TransferFeeBps,
+    /// Address that collects transfer fees
+    TransferFeeCollector,
+    // ── Issue #268: Buyback enhancement ────────────────────────────────
+    /// User-initiated buyback request by counter
+    BuybackRequest(u64),
+    /// Monotonic counter for buyback request IDs
+    BuybackRequestCounter,
 }
 
 #[contracttype]
@@ -410,6 +425,70 @@ pub struct EventNftContractSet {
     nft_contract: Address,
 }
 
+#// ── Issue #270: Whitelist enhancement events ──────────────────────
+
+#[contractevent(data_format = "vec")]
+pub struct EventWhitelistBatch {
+    count: u32,
+    action: u32,
+}
+
+#[contractevent(data_format = "vec")]
+pub struct EventWhitelistExpirySet {
+    addr: Address,
+    expiry: u64,
+}
+
+#[contractevent(data_format = "vec")]
+pub struct EventWhitelistTierSet {
+    addr: Address,
+    tier: u32,
+}
+
+#[contractevent(data_format = "vec")]
+pub struct EventTransferFeeConfig {
+    fee_bps: u32,
+    collector: Address,
+}
+
+#[contractevent(data_format = "vec")]
+pub struct EventTransferFeeCollected {
+    from: Address,
+    amount: i128,
+    fee_collector: Address,
+}
+
+#[contractevent(data_format = "vec")]
+pub struct EventBuybackRequested {
+    request_id: u64,
+    seller: Address,
+    amount: u32,
+}
+
+// ── Issue #270: Whitelist info struct ──────────────────────────────
+
+/// Composite whitelist status returned by get_whitelist_info()
+#[contracttype]
+#[derive(Clone)]
+pub struct WhitelistInfo {
+    pub whitelisted: bool,
+    pub tier: u32,
+    pub expiry: u64,
+}
+
+// ── Issue #268: Buyback request struct ─────────────────────────────
+
+/// A user-submitted buyback request awaiting admin processing.
+#[contracttype]
+#[derive(Clone)]
+pub struct BuybackRequest {
+    pub request_id: u64,
+    pub seller: Address,
+    pub amount: u32,
+    pub requested_price: i128,
+    pub timestamp: u64,
+}
+
 #[contractevent(data_format = "vec")]
 pub struct EventWhitelisted {
     addr: Address,
@@ -592,6 +671,8 @@ const FN_BUY_SHARES: u32 = 0;
 const FN_TRANSFER: u32 = 1;
 const FN_DIVIDEND: u32 = 2;
 const FN_SELL_ORDER: u32 = 3;
+const FN_BUYBACK: u32 = 4;
+const FN_TRANSFER_FROM: u32 = 5;
 
 /// Check if a specific function is paused via the bitflag.
 fn _is_function_paused(env: &Env, fn_id: u32) -> bool {
@@ -634,6 +715,84 @@ fn _require_circuit_breaker_clear(env: &Env) {
     }
 }
 
+// ── Issue #270: Whitelist validation helper ───────────────────────────
+/// Validate that `addr` is whitelisted and the entry has not expired.
+/// Panics with a descriptive message on failure.
+fn _validate_whitelist(env: &Env, addr: &Address) {
+    // Check basic whitelist flag
+    if !env
+        .storage()
+        .persistent()
+        .get::<DataKey, bool>(&DataKey::Whitelisted(addr.clone()))
+        .unwrap_or(false)
+    {
+        panic!("Address is not whitelisted");
+    }
+
+    // Check whitelist expiration (0 = never expires)
+    let expiry: u64 = env
+        .storage()
+        .persistent()
+        .get::<DataKey, u64>(&DataKey::WhitelistExpiry(addr.clone()))
+        .unwrap_or(0);
+    if expiry > 0 {
+        let now = env.ledger().timestamp();
+        if now >= expiry {
+            panic!("Whitelist entry has expired");
+        }
+    }
+}
+
+/// Check whitelist without panicking — returns (is_whitelisted, tier, expiry).
+fn _get_whitelist_info(env: &Env, addr: &Address) -> WhitelistInfo {
+    let whitelisted = env
+        .storage()
+        .persistent()
+        .get::<DataKey, bool>(&DataKey::Whitelisted(addr.clone()))
+        .unwrap_or(false);
+    let tier: u32 = env
+        .storage()
+        .persistent()
+        .get::<DataKey, u32>(&DataKey::WhitelistTier(addr.clone()))
+        .unwrap_or(0);
+    let expiry: u64 = env
+        .storage()
+        .persistent()
+        .get::<DataKey, u64>(&DataKey::WhitelistExpiry(addr.clone()))
+        .unwrap_or(0);
+    WhitelistInfo { whitelisted, tier, expiry }
+}
+
+// ── Issue #268: Oracle-aware price helper ─────────────────────────────
+/// Fetch the current share price. If an oracle is configured, attempt to
+/// read from it; fall back to the admin-set price on any failure.
+fn _get_current_price(env: &Env) -> i128 {
+    let admin_price: i128 = env
+        .storage()
+        .instance()
+        .get(&DataKey::PricePerShare)
+        .expect("Contract not initialized: price");
+
+    if let Some(oracle_addr) = env
+        .storage()
+        .instance()
+        .get::<DataKey, Address>(&DataKey::OracleAddress)
+    {
+        let oracle_client = OracleContractClient::new(env, &oracle_addr);
+        match oracle_client.try_get_price() {
+            Ok(Ok(p)) if p > 0 => {
+                EventOraclePriceFetched { oracle: oracle_addr, price: p }.publish(env);
+                return p;
+            }
+            _ => {
+                EventOraclePriceFallback { admin_price }.publish(env);
+            }
+        }
+    }
+
+    admin_price
+}
+
 #[contractimpl]
 impl RwaMarketplace {
     pub fn init(env: Env, admin: Address, payment_token: Address, price: i128, total_shares: u32) {
@@ -673,7 +832,7 @@ impl RwaMarketplace {
         // Store SIP-4 metadata
         let metadata = ContractMetadata {
             name: String::from_str(&env, "RWA Marketplace"),
-            version: String::from_str(&env, "0.3.0"),
+            version: String::from_str(&env, "0.4.0"),
             description: String::from_str(&env, "Tokenized Fractional RWA Marketplace"),
         };
         env.storage().instance().set(&DataKey::ContractMetadata, &metadata);
@@ -702,27 +861,14 @@ impl RwaMarketplace {
         // Issue #311: Check circuit breaker
         _require_circuit_breaker_clear(&env);
 
-        // Check whitelist for KYC compliance
-        if !env
-            .storage()
-            .persistent()
-            .get(&DataKey::Whitelisted(buyer.clone()))
-            .unwrap_or(false)
-        {
-            _set_non_reentrant(&env, false);
-            panic!("Buyer is not whitelisted");
-        }
+        // Issue #270: Enhanced whitelist validation (expiry-aware)
+        _validate_whitelist(&env, &buyer);
 
         let available: u32 = env
             .storage()
             .instance()
             .get(&DataKey::AvailableShares)
             .expect("Contract not initialized: available shares");
-
-        if !Self::is_whitelisted(env.clone(), buyer.clone()) {
-            _set_non_reentrant(&env, false);
-            panic!("Buyer is not whitelisted");
-        }
 
         if shares > available {
             _set_non_reentrant(&env, false);
@@ -754,31 +900,8 @@ impl RwaMarketplace {
 
         Self::require_accepted_token(&env, &payment_token);
 
-        // Issue #169: Fetch price from oracle if configured; fallback to admin price on error.
-        let admin_price: i128 = env.storage().instance().get(&DataKey::PricePerShare)
-            .expect("Contract not initialized: price");
-
-        let price: i128 = if let Some(oracle_addr) = env
-            .storage()
-            .instance()
-            .get::<DataKey, Address>(&DataKey::OracleAddress)
-        {
-            // Attempt to call oracle.get_price(); on any failure fall back to admin_price.
-            let oracle_client = OracleContractClient::new(&env, &oracle_addr);
-            let oracle_result = oracle_client.try_get_price();
-            match oracle_result {
-                Ok(Ok(p)) if p > 0 => {
-                    EventOraclePriceFetched { oracle: oracle_addr, price: p }.publish(&env);
-                    p
-                }
-                _ => {
-                    EventOraclePriceFallback { admin_price }.publish(&env);
-                    admin_price
-                }
-            }
-        } else {
-            admin_price
-        };
+        // Issue #268: Oracle-aware price (reusable helper)
+        let price: i128 = _get_current_price(&env);
 
         let total_cost = checked_mul_i128(price, shares as i128);
 
@@ -851,10 +974,79 @@ impl RwaMarketplace {
     }
 
     pub fn is_whitelisted(env: Env, addr: Address) -> bool {
-        env.storage()
+        // Check both the whitelist flag and expiration (Issue #270)
+        if !env.storage()
             .persistent()
-            .get(&DataKey::Whitelisted(addr))
+            .get::<DataKey, bool>(&DataKey::Whitelisted(addr.clone()))
             .unwrap_or(false)
+        {
+            return false;
+        }
+        let expiry: u64 = env
+            .storage()
+            .persistent()
+            .get::<DataKey, u64>(&DataKey::WhitelistExpiry(addr.clone()))
+            .unwrap_or(0);
+        if expiry > 0 && env.ledger().timestamp() >= expiry {
+            return false;
+        }
+        true
+    }
+
+    /// Batch-add addresses to the whitelist. Admin only.
+    pub fn add_to_whitelist_batch(env: Env, addrs: Vec<Address>) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin)
+            .expect("Contract not initialized: admin");
+        admin.require_auth();
+
+        let count = addrs.len() as u32;
+        for addr in addrs.iter() {
+            env.storage().persistent().set(&DataKey::Whitelisted(addr.clone()), &true);
+        }
+        EventWhitelistBatch { count, action: 0 }.publish(&env);
+    }
+
+    /// Batch-remove addresses from the whitelist. Admin only.
+    pub fn remove_from_whitelist_batch(env: Env, addrs: Vec<Address>) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin)
+            .expect("Contract not initialized: admin");
+        admin.require_auth();
+
+        let count = addrs.len() as u32;
+        for addr in addrs.iter() {
+            env.storage().persistent().remove(&DataKey::Whitelisted(addr.clone()));
+            env.storage().persistent().remove(&DataKey::WhitelistExpiry(addr.clone()));
+            env.storage().persistent().remove(&DataKey::WhitelistTier(addr.clone()));
+        }
+        EventWhitelistBatch { count, action: 1 }.publish(&env);
+    }
+
+    /// Set a whitelist expiration timestamp for an address. Admin only.
+    /// `expiry` = 0 means never expires.
+    pub fn set_whitelist_expiry(env: Env, addr: Address, expiry: u64) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin)
+            .expect("Contract not initialized: admin");
+        admin.require_auth();
+        env.storage().persistent().set(&DataKey::WhitelistExpiry(addr.clone()), &expiry);
+        EventWhitelistExpirySet { addr, expiry }.publish(&env);
+    }
+
+    /// Set the whitelist tier for an address. Admin only.
+    /// 0 = standard, 1 = premium, 2 = institutional.
+    pub fn set_whitelist_tier(env: Env, addr: Address, tier: u32) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin)
+            .expect("Contract not initialized: admin");
+        admin.require_auth();
+        if tier > 2 {
+            panic!("Invalid tier: must be 0, 1, or 2");
+        }
+        env.storage().persistent().set(&DataKey::WhitelistTier(addr.clone()), &tier);
+        EventWhitelistTierSet { addr, tier }.publish(&env);
+    }
+
+    /// Return composite whitelist info for an address.
+    pub fn get_whitelist_info(env: Env, addr: Address) -> WhitelistInfo {
+        _get_whitelist_info(&env, &addr)
     }
 
     /// Add a token to the accepted payment tokens list. Admin only.
@@ -1117,8 +1309,9 @@ impl RwaMarketplace {
 
         Self::require_accepted_token(&env, &payment_token);
 
-        let price: i128 = env.storage().instance().get(&DataKey::PricePerShare)
-            .expect("Contract not initialized: price");
+        // Issue #268: Oracle-aware price (reusable helper)
+        let price: i128 = _get_current_price(&env);
+
         let total_cost = price * (shares as i128);
 
         let admin: Address = env.storage().instance().get(&DataKey::Admin)
@@ -1542,7 +1735,7 @@ impl RwaMarketplace {
     // ── Issue #310: Granular Pause Controls ────────────────────────────────
 
     /// Pause a specific function category. Requires admin auth.
-    /// function_id: 0=buy, 1=transfer, 2=dividend, 3=sell_order
+    /// function_id: 0=buy, 1=transfer, 2=dividend, 3=sell_order, 4=buyback, 5=transfer_from
     pub fn pause_function(env: Env, function_id: u32) {
         let admin: Address = env
             .storage()
@@ -1551,8 +1744,8 @@ impl RwaMarketplace {
             .expect("Contract not initialized: admin");
         admin.require_auth();
 
-        if function_id > 3 {
-            panic!("Invalid function_id: must be 0-3");
+        if function_id > 5 {
+            panic!("Invalid function_id: must be 0-5");
         }
 
         _set_function_paused(&env, function_id, true);
@@ -1568,8 +1761,8 @@ impl RwaMarketplace {
             .expect("Contract not initialized: admin");
         admin.require_auth();
 
-        if function_id > 3 {
-            panic!("Invalid function_id: must be 0-3");
+        if function_id > 5 {
+            panic!("Invalid function_id: must be 0-5");
         }
 
         _set_function_paused(&env, function_id, false);
@@ -1578,8 +1771,8 @@ impl RwaMarketplace {
 
     /// Check if a specific function is paused.
     pub fn is_function_paused(env: Env, function_id: u32) -> bool {
-        if function_id > 3 {
-            panic!("Invalid function_id: must be 0-3");
+        if function_id > 5 {
+            panic!("Invalid function_id: must be 0-5");
         }
         _is_function_paused(&env, function_id)
     }
@@ -1947,6 +2140,40 @@ impl RwaMarketplace {
             .unwrap_or(0)
     }
 
+    // ── Issue #263: Transfer fee configuration ─────────────────────────
+
+    /// Configure the transfer fee in basis points and the collector address. Admin only.
+    /// E.g. `fee_bps` = 30 means 0.30% fee on each `transfer_shares_from`.
+    /// Set `fee_bps` = 0 to disable the transfer fee.
+    pub fn set_transfer_fee(env: Env, fee_bps: u32, collector: Address) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin)
+            .expect("Contract not initialized: admin");
+        admin.require_auth();
+
+        if fee_bps > 1000 {
+            panic!("Transfer fee cannot exceed 10% (1000 bps)");
+        }
+
+        env.storage().instance().set(&DataKey::TransferFeeBps, &fee_bps);
+        env.storage().instance().set(&DataKey::TransferFeeCollector, &collector);
+
+        EventTransferFeeConfig { fee_bps, collector }.publish(&env);
+    }
+
+    /// Return the configured transfer fee in basis points and the collector address.
+    pub fn get_transfer_fee(env: Env) -> (u32, Option<Address>) {
+        let fee_bps: u32 = env
+            .storage()
+            .instance()
+            .get::<DataKey, u32>(&DataKey::TransferFeeBps)
+            .unwrap_or(0);
+        let collector: Option<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::TransferFeeCollector);
+        (fee_bps, collector)
+    }
+
     // ── Share Transfer (secondary market) ──────────────────────────────────
 
     /// Approve `spender` to transfer up to `amount` of the caller's shares.
@@ -1967,11 +2194,16 @@ impl RwaMarketplace {
     }
 
     /// Transfer `amount` shares from caller to `to`. Requires caller auth.
+    /// Enforces whitelist validation on the recipient and reentrancy protection.
     pub fn transfer_shares(env: Env, from: Address, to: Address, amount: u32) {
         from.require_auth();
 
+        // Re-entrancy guard: protect balance updates
+        _check_non_reentrant(&env);
+
         // Issue #310: Check granular pause for transfers
         if _is_function_paused(&env, FN_TRANSFER) {
+            _set_non_reentrant(&env, false);
             panic!("Transfers are currently paused");
         }
 
@@ -1979,8 +2211,12 @@ impl RwaMarketplace {
         _require_circuit_breaker_clear(&env);
 
         if amount == 0 {
+            _set_non_reentrant(&env, false);
             panic!("Transfer amount must be positive");
         }
+
+        // Issue #270: Validate recipient is whitelisted
+        _validate_whitelist(&env, &to);
 
         let from_balance: u32 = env
             .storage()
@@ -1989,6 +2225,7 @@ impl RwaMarketplace {
             .unwrap_or(0);
 
         if amount > from_balance {
+            _set_non_reentrant(&env, false);
             panic!("Insufficient shares to transfer");
         }
 
@@ -2007,16 +2244,36 @@ impl RwaMarketplace {
 
         Self::register_holder(&env, to.clone());
 
+        _set_non_reentrant(&env, false);
+
         EventTransfer { from, to, amount }.publish(&env);
     }
 
     /// Transfer `amount` shares from `from` to `to` using an allowance. Requires spender auth.
+    /// Includes reentrancy protection, whitelist validation, granular pause, circuit breaker,
+    /// and transfer fee collection.
     pub fn transfer_shares_from(env: Env, spender: Address, from: Address, to: Address, amount: u32) {
         spender.require_auth();
 
+        // Re-entrancy guard
+        _check_non_reentrant(&env);
+
+        // Issue #310: Check granular pause for transfer_from
+        if _is_function_paused(&env, FN_TRANSFER_FROM) {
+            _set_non_reentrant(&env, false);
+            panic!("Transfers via allowance are currently paused");
+        }
+
+        // Issue #311: Check circuit breaker
+        _require_circuit_breaker_clear(&env);
+
         if amount == 0 {
+            _set_non_reentrant(&env, false);
             panic!("Transfer amount must be positive");
         }
+
+        // Issue #270: Validate recipient is whitelisted
+        _validate_whitelist(&env, &to);
 
         let allowance_key = DataKey::Allowance(from.clone(), spender.clone());
         let current_allowance: u32 = env
@@ -2026,6 +2283,7 @@ impl RwaMarketplace {
             .unwrap_or(0);
 
         if amount > current_allowance {
+            _set_non_reentrant(&env, false);
             panic!("Transfer amount exceeds allowance");
         }
 
@@ -2036,6 +2294,7 @@ impl RwaMarketplace {
             .unwrap_or(0);
 
         if amount > from_balance {
+            _set_non_reentrant(&env, false);
             panic!("Insufficient shares to transfer");
         }
 
@@ -2044,6 +2303,33 @@ impl RwaMarketplace {
             .persistent()
             .get(&DataKey::Balance(to.clone()))
             .unwrap_or(0);
+
+        // ── Issue #263: Transfer fee collection ────────────────────────
+        let fee_bps: u32 = env
+            .storage()
+            .instance()
+            .get::<DataKey, u32>(&DataKey::TransferFeeBps)
+            .unwrap_or(0);
+        if fee_bps > 0 {
+            let fee_collector: Address = env
+                .storage()
+                .instance()
+                .get(&DataKey::TransferFeeCollector)
+                .expect("Transfer fee collector not configured");
+            let price: i128 = _get_current_price(&env);
+            let transfer_value = checked_mul_i128(price, amount as i128);
+            let fee_amount = checked_mul_i128(transfer_value, fee_bps as i128) / 10000i128;
+            if fee_amount > 0 {
+                let token_id: Address = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::PaymentToken)
+                    .expect("Contract not initialized: payment token");
+                token::TokenClient::new(&env, &token_id)
+                    .transfer(&spender, &fee_collector, &fee_amount);
+                EventTransferFeeCollected { from: from.clone(), amount: fee_amount, fee_collector }.publish(&env);
+            }
+        }
 
         // Deduct allowance
         env.storage()
@@ -2058,6 +2344,8 @@ impl RwaMarketplace {
             .set(&DataKey::Balance(to.clone()), &checked_add_u32(to_balance, amount));
 
         Self::register_holder(&env, to.clone());
+
+        _set_non_reentrant(&env, false);
 
         EventTransfer { from, to, amount }.publish(&env);
     }
@@ -2181,6 +2469,11 @@ impl RwaMarketplace {
     pub fn buyback_shares(env: Env, seller: Address, amount: u32) {
         seller.require_auth();
 
+        // Issue #310: Check granular pause for buybacks
+        if _is_function_paused(&env, FN_BUYBACK) {
+            panic!("Buybacks are currently paused");
+        }
+
         if amount == 0 {
             panic!("Buyback amount must be positive");
         }
@@ -2195,11 +2488,8 @@ impl RwaMarketplace {
             panic!("Seller has insufficient shares");
         }
 
-        let price: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::PricePerShare)
-            .expect("Contract not initialized: price");
+        // Issue #268: Use oracle-aware price helper for buyback pricing
+        let price: i128 = _get_current_price(&env);
 
         let total_cost = checked_mul_i128(price, amount as i128);
 
@@ -2321,6 +2611,64 @@ impl RwaMarketplace {
 
         // Delegate to the core buyback, which requires seller auth
         Self::buyback_shares(env, seller, amount);
+    }
+
+    /// Return the current auto-buyback configuration.
+    pub fn get_buyback_config(env: Env) -> Option<AutoBuybackConfig> {
+        env.storage().instance().get(&DataKey::BuybackConfig)
+    }
+
+    // ── Issue #268: User-initiated buyback requests ────────────────────
+
+    /// Submit a buyback request for the admin to process. Caller must be a
+    /// share holder. This records the request on-chain with a unique ID.
+    pub fn request_buyback(env: Env, seller: Address, amount: u32, requested_price: i128) -> u64 {
+        seller.require_auth();
+
+        if amount == 0 {
+            panic!("Buyback amount must be positive");
+        }
+
+        let seller_balance: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Balance(seller.clone()))
+            .unwrap_or(0);
+        if amount > seller_balance {
+            panic!("Insufficient shares for buyback request");
+        }
+
+        let counter: u64 = env
+            .storage()
+            .instance()
+            .get::<DataKey, u64>(&DataKey::BuybackRequestCounter)
+            .unwrap_or(0)
+            + 1;
+        env.storage()
+            .instance()
+            .set(&DataKey::BuybackRequestCounter, &counter);
+
+        let request = BuybackRequest {
+            request_id: counter,
+            seller: seller.clone(),
+            amount,
+            requested_price,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::BuybackRequest(counter), &request);
+
+        EventBuybackRequested { request_id: counter, seller, amount }.publish(&env);
+
+        counter
+    }
+
+    /// Retrieve a previously submitted buyback request by ID.
+    pub fn get_buyback_request(env: Env, request_id: u64) -> Option<BuybackRequest> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::BuybackRequest(request_id))
     }
 
     // ── Issue #262: Batch Share Purchase ─────────────────────────────────
@@ -5205,7 +5553,7 @@ mod sip4_metadata_tests {
         let meta = c.get_contract_metadata();
 
         assert_eq!(meta.name, String::from_str(&te.env, "RWA Marketplace"));
-        assert_eq!(meta.version, String::from_str(&te.env, "0.2.0"));
+        assert_eq!(meta.version, String::from_str(&te.env, "0.4.0"));
         assert_eq!(meta.description, String::from_str(&te.env, "Tokenized Fractional RWA Marketplace"));
     }
 
@@ -5504,8 +5852,100 @@ mod sip4_metadata_tests {
         for i in 0..10u32 {
             assert!(results.get(i).unwrap().success);
         }
-        assert_eq!(c.get_shares(&te.buyer), 10);
-        assert_eq!(c.get_available_shares(), 990);
+        assert_eq!(c.get_shares(&te.buyer), 10);        assert_eq!(c.get_available_shares(), 990);
     }
 
+    // ── Issue #270: Whitelist enhancement tests ───────────────────────────
+
+    #[test]
+    fn test_add_to_whitelist_batch() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        let a1 = Address::generate(&te.env);
+        let a2 = Address::generate(&te.env);
+        let mut addrs: Vec<Address> = Vec::new(&te.env);
+        addrs.push_back(a1.clone());
+        addrs.push_back(a2.clone());
+        c.add_to_whitelist_batch(&addrs);
+        assert!(c.is_whitelisted(&a1));
+        assert!(c.is_whitelisted(&a2));
+    }
+
+    #[test]
+    fn test_set_whitelist_expiry() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        let addr = Address::generate(&te.env);
+        c.add_to_whitelist(&addr);
+        let far_future = te.env.ledger().timestamp() + 86_400;
+        c.set_whitelist_expiry(&addr, &far_future);
+        assert!(c.is_whitelisted(&addr));
+        c.set_whitelist_expiry(&addr, &1_u64);
+        assert!(!c.is_whitelisted(&addr));
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid tier")]
+    fn test_set_whitelist_tier_invalid() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        let addr = Address::generate(&te.env);
+        c.set_whitelist_tier(&addr, &5_u32);
+    }
+
+    // ── Issue #263: Transfer fee tests ─────────────────────────────────────
+
+    #[test]
+    fn test_set_and_get_transfer_fee() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        let collector = Address::generate(&te.env);
+        c.set_transfer_fee(&30_u32, &collector);
+        let (fee_bps, fee_collector) = c.get_transfer_fee();
+        assert_eq!(fee_bps, 30);
+        assert_eq!(fee_collector, Some(collector));
+    }
+
+    #[test]
+    #[should_panic(expected = "Transfer fee cannot exceed")]
+    fn test_set_transfer_fee_too_high() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        let collector = Address::generate(&te.env);
+        c.set_transfer_fee(&2000_u32, &collector);
+    }
+
+    // ── Issue #268: Buyback enhancement tests ─────────────────────────────
+
+    #[test]
+    fn test_request_buyback() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+        c.buy_shares(&te.buyer, &100, &te.token_id);
+        let request_id = c.request_buyback(&te.buyer, &50, &95_i128);
+        let request = c.get_buyback_request(&request_id);
+        assert!(request.is_some());
+    }
+
+    #[test]
+    #[should_panic(expected = "Buybacks are currently paused")]
+    fn test_buyback_paused() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+        c.buy_shares(&te.buyer, &100, &te.token_id);
+        mint(&te, &te.contract_id, 50_000);
+        c.pause_function(&4_u32);
+        c.buyback_shares(&te.buyer, &10);
+    }
 }
