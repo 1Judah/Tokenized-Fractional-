@@ -115,6 +115,21 @@ pub enum DataKey {
     BuybackRequest(u64),
     /// Monotonic counter for buyback request IDs
     BuybackRequestCounter,
+    // ── Issue #274: Purchase Limits ────────────────────────────────────────
+    /// Global purchase limit configuration
+    PurchaseLimitConfig,
+    /// User's purchase history for time-based limits
+    UserPurchaseHistory(Address),
+    /// Limit exemption status for an address
+    LimitExempt(Address),
+    /// Tier-specific limits configuration
+    TierLimits(u32),
+    /// Limit violation counter per user
+    LimitViolations(Address),
+    /// Limit change history counter
+    LimitHistoryCounter,
+    /// Limit change history entry by counter
+    LimitHistoryEntry(u64),
 }
 
 #[contracttype]
@@ -191,6 +206,86 @@ pub struct CircuitBreakerConfig {
     pub max_volume_per_block: u32,
     /// Whether the circuit breaker is currently armed (can trigger)
     pub armed: bool,
+}
+
+/// Issue #274: Purchase limit configuration
+#[contracttype]
+#[derive(Clone)]
+pub struct PurchaseLimitConfig {
+    /// Maximum shares a user can hold (0 = no limit)
+    pub max_shares_per_user: u32,
+    /// Maximum total value a user can purchase (in smallest token unit, 0 = no limit)
+    pub max_value_per_user: i128,
+    /// Daily purchase limit in shares (0 = no limit)
+    pub daily_shares_limit: u32,
+    /// Daily purchase limit in value (0 = no limit)
+    pub daily_value_limit: i128,
+    /// Weekly purchase limit in shares (0 = no limit)
+    pub weekly_shares_limit: u32,
+    /// Weekly purchase limit in value (0 = no limit)
+    pub weekly_value_limit: i128,
+    /// Monthly purchase limit in shares (0 = no limit)
+    pub monthly_shares_limit: u32,
+    /// Monthly purchase limit in value (0 = no limit)
+    pub monthly_value_limit: i128,
+    /// Whether limits are enforced
+    pub enabled: bool,
+}
+
+/// Issue #274: User purchase history for time-based limits
+#[contracttype]
+#[derive(Clone)]
+pub struct UserPurchaseHistory {
+    /// Timestamp of last purchase
+    pub last_purchase_time: u64,
+    /// Shares purchased in current day
+    pub daily_shares: u32,
+    /// Value purchased in current day
+    pub daily_value: i128,
+    /// Start of current day (timestamp)
+    pub day_start: u64,
+    /// Shares purchased in current week
+    pub weekly_shares: u32,
+    /// Value purchased in current week
+    pub weekly_value: i128,
+    /// Start of current week (timestamp)
+    pub week_start: u64,
+    /// Shares purchased in current month
+    pub monthly_shares: u32,
+    /// Value purchased in current month
+    pub monthly_value: i128,
+    /// Start of current month (timestamp)
+    pub month_start: u64,
+}
+
+/// Issue #274: Tier-specific limits
+#[contracttype]
+#[derive(Clone)]
+pub struct TierLimits {
+    /// Maximum shares for this tier (0 = use global limit)
+    pub max_shares: u32,
+    /// Maximum value for this tier (0 = use global limit)
+    pub max_value: i128,
+    /// Daily shares multiplier (basis points, 10000 = 1x)
+    pub daily_shares_multiplier: u32,
+    /// Daily value multiplier (basis points, 10000 = 1x)
+    pub daily_value_multiplier: u32,
+}
+
+/// Issue #274: Limit change history entry
+#[contracttype]
+#[derive(Clone)]
+pub struct LimitHistoryEntry {
+    /// Timestamp of change
+    pub timestamp: u64,
+    /// Type of limit changed
+    pub limit_type: u32,
+    /// Old value (as string for flexibility)
+    pub old_value: String,
+    /// New value (as string for flexibility)
+    pub new_value: String,
+    /// Admin who made the change
+    pub changed_by: Address,
 }
 
 #[contractevent(data_format = "vec")]
@@ -302,6 +397,42 @@ pub struct EventSetTotalShares {
 pub struct EventSetMaxSharesPerUser {
     old_max: u32,
     new_max: u32,
+}
+
+// ── Issue #274: Purchase Limit Events ────────────────────────────────────────
+
+#[contractevent(data_format = "vec")]
+pub struct EventPurchaseLimitConfigSet {
+    enabled: bool,
+    max_shares: u32,
+    max_value: i128,
+}
+
+#[contractevent(data_format = "vec")]
+pub struct EventLimitViolation {
+    user: Address,
+    limit_type: u32,
+    attempted_value: i128,
+    limit_value: i128,
+}
+
+#[contractevent(data_format = "vec")]
+pub struct EventLimitExemptSet {
+    address: Address,
+    exempt: bool,
+}
+
+#[contractevent(data_format = "vec")]
+pub struct EventTierLimitsSet {
+    tier: u32,
+    max_shares: u32,
+    max_value: i128,
+}
+
+#[contractevent(data_format = "vec")]
+pub struct EventUserPurchaseReset {
+    address: Address,
+    period: u32,
 }
 
 #[contractevent(data_format = "vec")]
@@ -743,6 +874,404 @@ fn _validate_whitelist(env: &Env, addr: &Address) {
     }
 }
 
+// ── Issue #274: Purchase limit validation helpers ──────────────────────
+
+/// Limit type constants for event logging
+const LIMIT_TYPE_MAX_SHARES: u32 = 1;
+const LIMIT_TYPE_MAX_VALUE: u32 = 2;
+const LIMIT_TYPE_DAILY_SHARES: u32 = 3;
+const LIMIT_TYPE_DAILY_VALUE: u32 = 4;
+const LIMIT_TYPE_WEEKLY_SHARES: u32 = 5;
+const LIMIT_TYPE_WEEKLY_VALUE: u32 = 6;
+const LIMIT_TYPE_MONTHLY_SHARES: u32 = 7;
+const LIMIT_TYPE_MONTHLY_VALUE: u32 = 8;
+
+/// Validate purchase limits before allowing a purchase.
+/// Returns updated purchase history if validation passes.
+fn _validate_purchase_limits(
+    env: &Env,
+    buyer: &Address,
+    shares: u32,
+    value: i128,
+) -> UserPurchaseHistory {
+    // Check if limits are enabled
+    let config: PurchaseLimitConfig = env
+        .storage()
+        .instance()
+        .get(&DataKey::PurchaseLimitConfig)
+        .unwrap_or_else(|| PurchaseLimitConfig {
+            max_shares_per_user: 0,
+            max_value_per_user: 0,
+            daily_shares_limit: 0,
+            daily_value_limit: 0,
+            weekly_shares_limit: 0,
+            weekly_value_limit: 0,
+            monthly_shares_limit: 0,
+            monthly_value_limit: 0,
+            enabled: false,
+        });
+
+    // If limits are disabled, return early
+    if !config.enabled {
+        return UserPurchaseHistory {
+            last_purchase_time: env.ledger().timestamp(),
+            daily_shares: 0,
+            daily_value: 0,
+            day_start: 0,
+            weekly_shares: 0,
+            weekly_value: 0,
+            week_start: 0,
+            monthly_shares: 0,
+            monthly_value: 0,
+            month_start: 0,
+        };
+    }
+
+    // Check if user is exempt from limits
+    if env
+        .storage()
+        .persistent()
+        .get::<DataKey, bool>(&DataKey::LimitExempt(buyer.clone()))
+        .unwrap_or(false)
+    {
+        return UserPurchaseHistory {
+            last_purchase_time: env.ledger().timestamp(),
+            daily_shares: 0,
+            daily_value: 0,
+            day_start: 0,
+            weekly_shares: 0,
+            weekly_value: 0,
+            week_start: 0,
+            monthly_shares: 0,
+            monthly_value: 0,
+            month_start: 0,
+        };
+    }
+
+    // Get user's whitelist tier for tier-specific limits
+    let tier: u32 = env
+        .storage()
+        .persistent()
+        .get(&DataKey::WhitelistTier(buyer.clone()))
+        .unwrap_or(0);
+
+    let tier_limits: TierLimits = env
+        .storage()
+        .instance()
+        .get(&DataKey::TierLimits(tier))
+        .unwrap_or_else(|| TierLimits {
+            max_shares: 0,
+            max_value: 0,
+            daily_shares_multiplier: 10000,
+            daily_value_multiplier: 10000,
+        });
+
+    // Determine effective limits (tier-specific or global)
+    let effective_max_shares = if tier_limits.max_shares > 0 {
+        tier_limits.max_shares
+    } else {
+        config.max_shares_per_user
+    };
+
+    let effective_max_value = if tier_limits.max_value > 0 {
+        tier_limits.max_value
+    } else {
+        config.max_value_per_user
+    };
+
+    // Check maximum shares limit
+    let current_balance: u32 = env
+        .storage()
+        .persistent()
+        .get(&DataKey::Balance(buyer.clone()))
+        .unwrap_or(0);
+    let prospective_balance = checked_add_u32(current_balance, shares);
+
+    if effective_max_shares > 0 && prospective_balance > effective_max_shares {
+        // Increment violation counter
+        let violations = env
+            .storage()
+            .persistent()
+            .get::<DataKey, u32>(&DataKey::LimitViolations(buyer.clone()))
+            .unwrap_or(0);
+        env.storage()
+            .persistent()
+            .set(&DataKey::LimitViolations(buyer.clone()), &(violations + 1));
+
+        EventLimitViolation {
+            user: buyer.clone(),
+            limit_type: LIMIT_TYPE_MAX_SHARES,
+            attempted_value: prospective_balance as i128,
+            limit_value: effective_max_shares as i128,
+        }
+        .publish(env);
+
+        panic!("Purchase exceeds maximum shares limit");
+    }
+
+    // Check maximum value limit
+    let current_total_value = _get_user_total_purchased_value(env, buyer);
+    let prospective_total_value = current_total_value + value;
+
+    if effective_max_value > 0 && prospective_total_value > effective_max_value {
+        let violations = env
+            .storage()
+            .persistent()
+            .get::<DataKey, u32>(&DataKey::LimitViolations(buyer.clone()))
+            .unwrap_or(0);
+        env.storage()
+            .persistent()
+            .set(&DataKey::LimitViolations(buyer.clone()), &(violations + 1));
+
+        EventLimitViolation {
+            user: buyer.clone(),
+            limit_type: LIMIT_TYPE_MAX_VALUE,
+            attempted_value: prospective_total_value,
+            limit_value: effective_max_value,
+        }
+        .publish(env);
+
+        panic!("Purchase exceeds maximum value limit");
+    }
+
+    // Get and update purchase history for time-based limits
+    let mut history = env
+        .storage()
+        .persistent()
+        .get(&DataKey::UserPurchaseHistory(buyer.clone()))
+        .unwrap_or_else(|| UserPurchaseHistory {
+            last_purchase_time: 0,
+            daily_shares: 0,
+            daily_value: 0,
+            day_start: 0,
+            weekly_shares: 0,
+            weekly_value: 0,
+            week_start: 0,
+            monthly_shares: 0,
+            monthly_value: 0,
+            month_start: 0,
+        });
+
+    let now = env.ledger().timestamp();
+    let seconds_per_day = 86400u64;
+    let seconds_per_week = 604800u64;
+    let seconds_per_month = 2592000u64; // 30 days
+
+    // Reset daily counters if needed
+    if history.day_start == 0 || now - history.day_start >= seconds_per_day {
+        history.daily_shares = 0;
+        history.daily_value = 0;
+        history.day_start = now;
+    }
+
+    // Reset weekly counters if needed
+    if history.week_start == 0 || now - history.week_start >= seconds_per_week {
+        history.weekly_shares = 0;
+        history.weekly_value = 0;
+        history.week_start = now;
+    }
+
+    // Reset monthly counters if needed
+    if history.month_start == 0 || now - history.month_start >= seconds_per_month {
+        history.monthly_shares = 0;
+        history.monthly_value = 0;
+        history.month_start = now;
+    }
+
+    // Apply tier multipliers to time-based limits
+    let effective_daily_shares = if config.daily_shares_limit > 0 {
+        (config.daily_shares_limit as i128 * tier_limits.daily_shares_multiplier as i128) / 10000
+    } else {
+        0
+    };
+
+    let effective_daily_value = if config.daily_value_limit > 0 {
+        config.daily_value_limit * tier_limits.daily_value_multiplier as i128 / 10000
+    } else {
+        0
+    };
+
+    // Check daily limits
+    if effective_daily_shares > 0 {
+        let prospective_daily = history.daily_shares + shares;
+        if prospective_daily > effective_daily_shares as u32 {
+            let violations = env
+                .storage()
+                .persistent()
+                .get::<DataKey, u32>(&DataKey::LimitViolations(buyer.clone()))
+                .unwrap_or(0);
+            env.storage()
+                .persistent()
+                .set(&DataKey::LimitViolations(buyer.clone()), &(violations + 1));
+
+            EventLimitViolation {
+                user: buyer.clone(),
+                limit_type: LIMIT_TYPE_DAILY_SHARES,
+                attempted_value: prospective_daily as i128,
+                limit_value: effective_daily_shares,
+            }
+            .publish(env);
+
+            panic!("Purchase exceeds daily shares limit");
+        }
+    }
+
+    if effective_daily_value > 0 {
+        let prospective_daily_value = history.daily_value + value;
+        if prospective_daily_value > effective_daily_value {
+            let violations = env
+                .storage()
+                .persistent()
+                .get::<DataKey, u32>(&DataKey::LimitViolations(buyer.clone()))
+                .unwrap_or(0);
+            env.storage()
+                .persistent()
+                .set(&DataKey::LimitViolations(buyer.clone()), &(violations + 1));
+
+            EventLimitViolation {
+                user: buyer.clone(),
+                limit_type: LIMIT_TYPE_DAILY_VALUE,
+                attempted_value: prospective_daily_value,
+                limit_value: effective_daily_value,
+            }
+            .publish(env);
+
+            panic!("Purchase exceeds daily value limit");
+        }
+    }
+
+    // Check weekly limits
+    if config.weekly_shares_limit > 0 {
+        let prospective_weekly = history.weekly_shares + shares;
+        if prospective_weekly > config.weekly_shares_limit {
+            let violations = env
+                .storage()
+                .persistent()
+                .get::<DataKey, u32>(&DataKey::LimitViolations(buyer.clone()))
+                .unwrap_or(0);
+            env.storage()
+                .persistent()
+                .set(&DataKey::LimitViolations(buyer.clone()), &(violations + 1));
+
+            EventLimitViolation {
+                user: buyer.clone(),
+                limit_type: LIMIT_TYPE_WEEKLY_SHARES,
+                attempted_value: prospective_weekly as i128,
+                limit_value: config.weekly_shares_limit as i128,
+            }
+            .publish(env);
+
+            panic!("Purchase exceeds weekly shares limit");
+        }
+    }
+
+    if config.weekly_value_limit > 0 {
+        let prospective_weekly_value = history.weekly_value + value;
+        if prospective_weekly_value > config.weekly_value_limit {
+            let violations = env
+                .storage()
+                .persistent()
+                .get::<DataKey, u32>(&DataKey::LimitViolations(buyer.clone()))
+                .unwrap_or(0);
+            env.storage()
+                .persistent()
+                .set(&DataKey::LimitViolations(buyer.clone()), &(violations + 1));
+
+            EventLimitViolation {
+                user: buyer.clone(),
+                limit_type: LIMIT_TYPE_WEEKLY_VALUE,
+                attempted_value: prospective_weekly_value,
+                limit_value: config.weekly_value_limit,
+            }
+            .publish(env);
+
+            panic!("Purchase exceeds weekly value limit");
+        }
+    }
+
+    // Check monthly limits
+    if config.monthly_shares_limit > 0 {
+        let prospective_monthly = history.monthly_shares + shares;
+        if prospective_monthly > config.monthly_shares_limit {
+            let violations = env
+                .storage()
+                .persistent()
+                .get::<DataKey, u32>(&DataKey::LimitViolations(buyer.clone()))
+                .unwrap_or(0);
+            env.storage()
+                .persistent()
+                .set(&DataKey::LimitViolations(buyer.clone()), &(violations + 1));
+
+            EventLimitViolation {
+                user: buyer.clone(),
+                limit_type: LIMIT_TYPE_MONTHLY_SHARES,
+                attempted_value: prospective_monthly as i128,
+                limit_value: config.monthly_shares_limit as i128,
+            }
+            .publish(env);
+
+            panic!("Purchase exceeds monthly shares limit");
+        }
+    }
+
+    if config.monthly_value_limit > 0 {
+        let prospective_monthly_value = history.monthly_value + value;
+        if prospective_monthly_value > config.monthly_value_limit {
+            let violations = env
+                .storage()
+                .persistent()
+                .get::<DataKey, u32>(&DataKey::LimitViolations(buyer.clone()))
+                .unwrap_or(0);
+            env.storage()
+                .persistent()
+                .set(&DataKey::LimitViolations(buyer.clone()), &(violations + 1));
+
+            EventLimitViolation {
+                user: buyer.clone(),
+                limit_type: LIMIT_TYPE_MONTHLY_VALUE,
+                attempted_value: prospective_monthly_value,
+                limit_value: config.monthly_value_limit,
+            }
+            .publish(env);
+
+            panic!("Purchase exceeds monthly value limit");
+        }
+    }
+
+    // Update purchase history with the new purchase
+    history.daily_shares += shares;
+    history.daily_value += value;
+    history.weekly_shares += shares;
+    history.weekly_value += value;
+    history.monthly_shares += shares;
+    history.monthly_value += value;
+    history.last_purchase_time = now;
+
+    history
+}
+
+/// Get the total value purchased by a user (for max value limit tracking).
+/// This is a simplified version - in production, you'd want to track this more carefully.
+fn _get_user_total_purchased_value(env: &Env, user: &Address) -> i128 {
+    // For now, we'll estimate based on current balance and price
+    // In production, you'd want to track cumulative purchases separately
+    let balance: u32 = env
+        .storage()
+        .persistent()
+        .get(&DataKey::Balance(user.clone()))
+        .unwrap_or(0);
+    
+    let price: i128 = _get_current_price(env);
+    balance as i128 * price
+}
+
+/// Update user's purchase history after a successful purchase.
+fn _update_purchase_history(env: &Env, buyer: &Address, history: UserPurchaseHistory) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::UserPurchaseHistory(buyer.clone()), &history);
+}
+
 /// Check whitelist without panicking — returns (is_whitelisted, tier, expiry).
 fn _get_whitelist_info(env: &Env, addr: &Address) -> WhitelistInfo {
     let whitelisted = env
@@ -864,6 +1393,17 @@ impl RwaMarketplace {
         // Issue #270: Enhanced whitelist validation (expiry-aware)
         _validate_whitelist(&env, &buyer);
 
+        // Issue #274: Purchase limit validation
+        Self::require_accepted_token(&env, &payment_token);
+
+        // Issue #268: Oracle-aware price (reusable helper)
+        let price: i128 = _get_current_price(&env);
+
+        let total_cost = checked_mul_i128(price, shares as i128);
+
+        // Validate purchase limits (will panic if limits are exceeded)
+        let purchase_history = _validate_purchase_limits(&env, &buyer, shares, total_cost);
+
         let available: u32 = env
             .storage()
             .instance()
@@ -882,6 +1422,8 @@ impl RwaMarketplace {
 
         // Enforce per-address cap (current holdings + this purchase) before
         // transferring any tokens. A cap of 0 means "no limit".
+        // Note: This is the legacy limit check - the new comprehensive limits
+        // are checked in _validate_purchase_limits above
         let prev_balance: u32 = env
             .storage()
             .persistent()
@@ -897,13 +1439,6 @@ impl RwaMarketplace {
             _set_non_reentrant(&env, false);
             panic!("Purchase exceeds max shares per user");
         }
-
-        Self::require_accepted_token(&env, &payment_token);
-
-        // Issue #268: Oracle-aware price (reusable helper)
-        let price: i128 = _get_current_price(&env);
-
-        let total_cost = checked_mul_i128(price, shares as i128);
 
         let admin: Address = env.storage().instance().get(&DataKey::Admin)
             .expect("Contract not initialized: admin");
@@ -935,6 +1470,9 @@ impl RwaMarketplace {
                 nft.mint_certificate(&buyer);
             }
         }
+
+        // Issue #274: Update purchase history after successful purchase
+        _update_purchase_history(&env, &buyer, purchase_history);
 
         // Clear reentrancy guard before publishing event
         _set_non_reentrant(&env, false);
@@ -1314,6 +1852,9 @@ impl RwaMarketplace {
 
         let total_cost = price * (shares as i128);
 
+        // Issue #274: Purchase limit validation for vested shares
+        let purchase_history = _validate_purchase_limits(&env, &buyer, shares, total_cost);
+
         let admin: Address = env.storage().instance().get(&DataKey::Admin)
             .expect("Contract not initialized: admin");
 
@@ -1338,6 +1879,9 @@ impl RwaMarketplace {
         Self::set_vesting_schedules(&env, &buyer, &schedules);
 
         Self::register_holder(&env, buyer.clone());
+
+        // Issue #274: Update purchase history after successful purchase
+        _update_purchase_history(&env, &buyer, purchase_history);
 
         EventBuyShares { buyer, shares, total_cost }.publish(&env);
     }
@@ -2140,6 +2684,229 @@ impl RwaMarketplace {
             .unwrap_or(0)
     }
 
+    // ── Issue #274: Purchase Limit Configuration ─────────────────────────────
+
+    /// Set comprehensive purchase limits. Admin only.
+    /// All limits of 0 mean no limit for that category.
+    pub fn set_purchase_limits(
+        env: Env,
+        max_shares: u32,
+        max_value: i128,
+        daily_shares: u32,
+        daily_value: i128,
+        weekly_shares: u32,
+        weekly_value: i128,
+        monthly_shares: u32,
+        monthly_value: i128,
+        enabled: bool,
+    ) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin)
+            .expect("Contract not initialized: admin");
+        admin.require_auth();
+
+        let config = PurchaseLimitConfig {
+            max_shares_per_user: max_shares,
+            max_value_per_user: max_value,
+            daily_shares_limit: daily_shares,
+            daily_value_limit: daily_value,
+            weekly_shares_limit: weekly_shares,
+            weekly_value_limit: weekly_value,
+            monthly_shares_limit: monthly_shares,
+            monthly_value_limit: monthly_value,
+            enabled,
+        };
+
+        env.storage().instance().set(&DataKey::PurchaseLimitConfig, &config);
+
+        EventPurchaseLimitConfigSet {
+            enabled,
+            max_shares,
+            max_value,
+        }
+        .publish(&env);
+    }
+
+    /// Get the current purchase limit configuration.
+    pub fn get_purchase_limits(env: Env) -> PurchaseLimitConfig {
+        env.storage()
+            .instance()
+            .get(&DataKey::PurchaseLimitConfig)
+            .unwrap_or_else(|| PurchaseLimitConfig {
+                max_shares_per_user: 0,
+                max_value_per_user: 0,
+                daily_shares_limit: 0,
+                daily_value_limit: 0,
+                weekly_shares_limit: 0,
+                weekly_value_limit: 0,
+                monthly_shares_limit: 0,
+                monthly_value_limit: 0,
+                enabled: false,
+            })
+    }
+
+    /// Enable or disable purchase limit enforcement. Admin only.
+    pub fn set_purchase_limits_enabled(env: Env, enabled: bool) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin)
+            .expect("Contract not initialized: admin");
+        admin.require_auth();
+
+        let mut config = Self::get_purchase_limits(env);
+        config.enabled = enabled;
+        env.storage().instance().set(&DataKey::PurchaseLimitConfig, &config);
+
+        EventPurchaseLimitConfigSet {
+            enabled,
+            max_shares: config.max_shares_per_user,
+            max_value: config.max_value_per_user,
+        }
+        .publish(&env);
+    }
+
+    /// Set tier-specific limits for a whitelist tier. Admin only.
+    /// Tier 0 = standard, 1 = premium, 2 = institutional.
+    /// Values of 0 mean use global limits.
+    pub fn set_tier_limits(
+        env: Env,
+        tier: u32,
+        max_shares: u32,
+        max_value: i128,
+        daily_shares_multiplier: u32,
+        daily_value_multiplier: u32,
+    ) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin)
+            .expect("Contract not initialized: admin");
+        admin.require_auth();
+
+        if tier > 2 {
+            panic!("Invalid tier. Must be 0, 1, or 2");
+        }
+
+        let tier_limits = TierLimits {
+            max_shares,
+            max_value,
+            daily_shares_multiplier,
+            daily_value_multiplier,
+        };
+
+        env.storage()
+            .instance()
+            .set(&DataKey::TierLimits(tier), &tier_limits);
+
+        EventTierLimitsSet {
+            tier,
+            max_shares,
+            max_value,
+        }
+        .publish(&env);
+    }
+
+    /// Get tier-specific limits for a given tier.
+    pub fn get_tier_limits(env: Env, tier: u32) -> TierLimits {
+        env.storage()
+            .instance()
+            .get(&DataKey::TierLimits(tier))
+            .unwrap_or_else(|| TierLimits {
+                max_shares: 0,
+                max_value: 0,
+                daily_shares_multiplier: 10000,
+                daily_value_multiplier: 10000,
+            })
+    }
+
+    /// Set limit exemption status for an address. Admin only.
+    /// Exempt addresses bypass all purchase limits.
+    pub fn set_limit_exempt(env: Env, address: Address, exempt: bool) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin)
+            .expect("Contract not initialized: admin");
+        admin.require_auth();
+
+        if exempt {
+            env.storage()
+                .persistent()
+                .set(&DataKey::LimitExempt(address.clone()), &true);
+        } else {
+            env.storage()
+                .persistent()
+                .remove(&DataKey::LimitExempt(address.clone()));
+        }
+
+        EventLimitExemptSet { address, exempt }.publish(&env);
+    }
+
+    /// Check if an address is exempt from purchase limits.
+    pub fn is_limit_exempt(env: Env, address: Address) -> bool {
+        env.storage()
+            .persistent()
+            .get(&DataKey::LimitExempt(address))
+            .unwrap_or(false)
+    }
+
+    /// Get user's purchase history for limit tracking.
+    pub fn get_user_purchase_history(env: Env, address: Address) -> UserPurchaseHistory {
+        env.storage()
+            .persistent()
+            .get(&DataKey::UserPurchaseHistory(address))
+            .unwrap_or_else(|| UserPurchaseHistory {
+                last_purchase_time: 0,
+                daily_shares: 0,
+                daily_value: 0,
+                day_start: 0,
+                weekly_shares: 0,
+                weekly_value: 0,
+                week_start: 0,
+                monthly_shares: 0,
+                monthly_value: 0,
+                month_start: 0,
+            })
+    }
+
+    /// Reset user's purchase history for a specific period. Admin only.
+    /// Period: 1 = daily, 2 = weekly, 3 = monthly.
+    pub fn reset_user_purchase_limits(env: Env, address: Address, period: u32) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin)
+            .expect("Contract not initialized: admin");
+        admin.require_auth();
+
+        if period > 3 {
+            panic!("Invalid period. Must be 1 (daily), 2 (weekly), or 3 (monthly)");
+        }
+
+        let mut history = Self::get_user_purchase_history(env, address.clone());
+
+        match period {
+            1 => {
+                history.daily_shares = 0;
+                history.daily_value = 0;
+                history.day_start = 0;
+            }
+            2 => {
+                history.weekly_shares = 0;
+                history.weekly_value = 0;
+                history.week_start = 0;
+            }
+            3 => {
+                history.monthly_shares = 0;
+                history.monthly_value = 0;
+                history.month_start = 0;
+            }
+            _ => panic!("Invalid period"),
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::UserPurchaseHistory(address), &history);
+
+        EventUserPurchaseReset { address, period }.publish(&env);
+    }
+
+    /// Get limit violation count for a user.
+    pub fn get_limit_violations(env: Env, address: Address) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::LimitViolations(address))
+            .unwrap_or(0)
+    }
+
     // ── Issue #263: Transfer fee configuration ─────────────────────────
 
     /// Configure the transfer fee in basis points and the collector address. Admin only.
@@ -2431,6 +3198,9 @@ impl RwaMarketplace {
 
         let total_cost = checked_mul_i128(order.price_per_share, amount as i128);
 
+        // Issue #274: Purchase limit validation for order purchases
+        let purchase_history = _validate_purchase_limits(&env, &buyer, amount, total_cost);
+
         let token_id: Address = env.storage().instance()
             .get(&DataKey::PaymentToken)
             .expect("Contract not initialized: payment token");
@@ -2451,6 +3221,9 @@ impl RwaMarketplace {
         } else {
             env.storage().persistent().set(&DataKey::SellOrder(order_id), &order);
         }
+
+        // Issue #274: Update purchase history after successful purchase
+        _update_purchase_history(&env, &buyer, purchase_history);
 
         EventOrderFilled { order_id, buyer, amount, total_cost }.publish(&env);
     }
