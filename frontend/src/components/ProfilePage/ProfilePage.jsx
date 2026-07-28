@@ -7,6 +7,7 @@ import CertificateTemplate from '../CertificateTemplate/CertificateTemplate';
 import Modal from '../Modal/Modal';
 import { useWalletStore } from '../../store/useWalletStore';
 import { useAssetStore } from '../../store/useAssetStore';
+import { useTranslation } from 'react-i18next';
 import { useToastStore } from '../../store/useToastStore';
 import styles from './ProfilePage.module.css';
 
@@ -28,6 +29,7 @@ function explorerLink(hash) {
 }
 
 export default function ProfilePage() {
+  const { t } = useTranslation();
   const { publicKey, shares, isConnecting, connect, disconnect } = useWalletStore();
   const { assets } = useAssetStore();
   const addToast = useToastStore((s) => s.addToast);
@@ -64,10 +66,10 @@ export default function ProfilePage() {
     if (!publicKey) return;
     navigator.clipboard.writeText(publicKey).then(function () {
       setCopied(true);
-      addToast({ message: 'Address copied to clipboard!', type: 'success' });
+      addToast({ message: t('profile.copied'), type: 'success' });
       setTimeout(function () { setCopied(false); }, 2000);
     }).catch(function () {
-      addToast({ message: 'Failed to copy address', type: 'error' });
+      addToast({ message: t('profile.copyFailed'), type: 'error' });
     });
   };
 
@@ -89,7 +91,7 @@ export default function ProfilePage() {
               Connect your Freighter wallet to view portfolio, manage preferences, download NFT certificates, and track your transaction history.
             </p>
             <Button onClick={connect} variant="primary" loading={isConnecting}>
-              {isConnecting ? 'Connecting...' : 'Connect Freighter'}
+              {isConnecting ? t('wallet.connecting') : t('wallet.connect')}
             </Button>
           </div>
         </Card>
@@ -136,10 +138,10 @@ export default function ProfilePage() {
 
       <nav className={styles.tabNav}>
         {[
-          { id: 'overview', label: 'Overview', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
-          { id: 'nfts', label: 'Certificates', icon: 'M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z' },
-          { id: 'activity', label: 'Activity', icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z' },
-          { id: 'support', label: 'Support', icon: 'M18.364 5.636l-3.536 3.536m0 5.656l3.536 3.536M9.172 9.172L5.636 5.636m3.536 9.192l-3.536 3.536M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-5 0a4 4 0 11-8 0 4 4 0 018 0z' },
+          { id: 'overview', label: t('profile.overview'), icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
+          { id: 'nfts', label: t('profile.certificates'), icon: 'M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z' },
+          { id: 'activity', label: t('profile.activity'), icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z' },
+          { id: 'support', label: t('profile.support'), icon: 'M18.364 5.636l-3.536 3.536m0 5.656l3.536 3.536M9.172 9.172L5.636 5.636m3.536 9.192l-3.536 3.536M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-5 0a4 4 0 11-8 0 4 4 0 018 0z' },
         ].map(function (tab) {
           return (
             <button key={tab.id} className={styles.tab + (activeTab === tab.id ? ' ' + styles.tabActive : '')} onClick={function () { setActiveTab(tab.id); }}>
@@ -214,7 +216,7 @@ export default function ProfilePage() {
                   <a href={explorerLink(tx.hash)} target="_blank" rel="noreferrer noopener" className={styles.txHash} title={tx.hash}>{shortHash(tx.hash)}</a>
                   <span className={styles.txDate}>{formatDate(tx.created_at)}</span>
                   <span className={styles.txOps}>{tx.operation_count ?? tx.operations_count ?? '--'}</span>
-                  <Badge variant={tx.successful ? 'success' : 'danger'}>{tx.successful ? 'Success' : 'Failed'}</Badge>
+                  <Badge variant={tx.successful ? 'success' : 'danger'}>{tx.successful ? t('profile.success') : t('profile.failed')}</Badge>
                 </div>;
               }) : <div className={styles.txEmpty}><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg><p>No transactions found</p></div>}
             </div>
@@ -243,7 +245,7 @@ export default function ProfilePage() {
                     : <div className={styles.nftImagePlaceholder}><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg></div>}
                   <div className={styles.nftInfo}><h4 className={styles.nftName}>{asset.title || 'Asset #' + (i + 1)}</h4><p className={styles.nftShares}>Ownership Certificate</p></div>
                   <div className={styles.nftActions}>
-                    <Button onClick={function () { setCertItem({ contractId: asset.contractId, title: asset.title || 'Asset Certificate', shares: asset.shares || 0, address: publicKey, date: new Date().toISOString() }); }} variant="secondary" size="sm">
+                    <Button onClick={function () { setCertItem({ contractId: asset.contractId, title: asset.title || t('profile.assetCert'), shares: asset.shares || 0, address: publicKey, date: new Date().toISOString() }); }} variant="secondary" size="sm">
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginRight: 4 }}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                       Certificate
                     </Button>
@@ -267,11 +269,11 @@ export default function ProfilePage() {
             <h3 className={styles.sectionTitle}>Activity Timeline</h3>
             <div className={styles.timeline}>
               {[
-                { action: 'Wallet connected', timestamp: Date.now() - 86400000 * 2, icon: 'wallet' },
-                { action: 'Shares purchased', detail: '5 shares of Asset #1', timestamp: Date.now() - 86400000 * 5, icon: 'shares' },
-                { action: 'Portfolio viewed', timestamp: Date.now() - 86400000 * 7, icon: 'view' },
-                { action: 'Certificate downloaded', timestamp: Date.now() - 86400000 * 10, icon: 'cert' },
-                { action: 'Transaction completed', detail: 'Payment received', timestamp: Date.now() - 86400000 * 14, icon: 'tx' },
+                { action: t('profile.walletConnected'), timestamp: Date.now() - 86400000 * 2, icon: 'wallet' },
+                { action: t('profile.sharesPurchased'), detail: t('profile.sharesPurchasedDetail'), timestamp: Date.now() - 86400000 * 5, icon: 'shares' },
+                { action: t('profile.portfolioViewed'), timestamp: Date.now() - 86400000 * 7, icon: 'view' },
+                { action: t('profile.certDownloaded'), timestamp: Date.now() - 86400000 * 10, icon: 'cert' },
+                { action: t('profile.txCompleted'), detail: t('profile.paymentReceived'), timestamp: Date.now() - 86400000 * 14, icon: 'tx' },
               ].map(function (item, i) {
                 return <div key={i} className={styles.timelineItem}>
                   <div className={styles.timelineDot}>
@@ -297,10 +299,10 @@ export default function ProfilePage() {
         <div className={styles.tabContent}>
           <div className={styles.supportGrid}>
             {[
-              { title: 'Help Center', desc: 'Browse FAQs and guides', icon: 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z' },
-              { title: 'Contact Support', desc: 'Get help from our team', icon: 'M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2zM22,6 12,13 2,6' },
-              { title: 'GitHub Issues', desc: 'Report bugs or request features', icon: 'M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22' },
-              { title: 'Documentation', desc: 'Read the full documentation', icon: 'M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253' },
+              { title: t('profile.helpCenter'), desc: t('profile.helpCenterDesc'), icon: 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z' },
+              { title: t('profile.contactSupport'), desc: t('profile.contactSupportDesc'), icon: 'M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2zM22,6 12,13 2,6' },
+              { title: t('profile.githubIssues'), desc: t('profile.githubIssuesDesc'), icon: 'M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22' },
+              { title: t('profile.documentation'), desc: t('profile.documentationDesc'), icon: 'M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253' },
             ].map(function (card, i) {
               return <Card key={i} className={styles.supportCard} hoverable>
                 <div className={styles.supportIcon}><svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" strokeWidth="1.5"><path d={card.icon}></path></svg></div>
@@ -335,7 +337,7 @@ export default function ProfilePage() {
               <label className={styles.prefToggle}><input type="checkbox" defaultChecked /><span>Push notifications for price alerts</span></label>
             </div>
             <div className={styles.prefActions}>
-              <Button variant="primary" onClick={function () { addToast({ message: 'Preferences saved!', type: 'success' }); setShowPreferences(false); }}>Save</Button>
+              <Button variant="primary" onClick={function () { addToast({ message: t('profile.prefsSaved'), type: 'success' }); setShowPreferences(false); }}>Save</Button>
               <Button variant="secondary" onClick={function () { setShowPreferences(false); }}>Cancel</Button>
             </div>
           </div>
