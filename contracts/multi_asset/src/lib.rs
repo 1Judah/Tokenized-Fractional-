@@ -876,7 +876,7 @@ impl MultiAssetManager {
 
         // Transfer payment from buyer to treasury
 
-        let client = stellar_tokens::TokenClient::new(&env, &info.payment_token);
+        let client = soroban_sdk::token::Client::new(&env, &info.payment_token);
 
         client.transfer(&buyer, &info.treasury, &total_cost);
 
@@ -1490,7 +1490,7 @@ mod tests {
 
         let buyer = Address::generate(&env);
 
-        let token_client = stellar_tokens::TokenClient::new(&env, &payment_token);
+        let token_client = soroban_sdk::token::Client::new(&env, &payment_token);
 
         token_client.mint(&buyer, &100000i128);
 
@@ -1542,7 +1542,7 @@ mod tests {
 
         let buyer = Address::generate(&env);
 
-        let token_client = stellar_tokens::TokenClient::new(&env, &payment_token);
+        let token_client = soroban_sdk::token::Client::new(&env, &payment_token);
 
         token_client.mint(&buyer, &100000i128);
 
