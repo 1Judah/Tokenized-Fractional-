@@ -1490,9 +1490,8 @@ mod tests {
 
         let buyer = Address::generate(&env);
 
-        let token_client = soroban_sdk::token::Client::new(&env, &payment_token);
-
-        token_client.mint(&buyer, &100000i128);
+        let sac = soroban_sdk::token::StellarAssetClient::new(&env, &payment_token);
+        sac.mint(&buyer, &100000i128);
 
 
         // Buy shares
@@ -1542,9 +1541,8 @@ mod tests {
 
         let buyer = Address::generate(&env);
 
-        let token_client = soroban_sdk::token::Client::new(&env, &payment_token);
-
-        token_client.mint(&buyer, &100000i128);
+        let sac = soroban_sdk::token::StellarAssetClient::new(&env, &payment_token);
+        sac.mint(&buyer, &100000i128);
 
         client.buy_asset_shares(&id, &buyer, &200);
 
