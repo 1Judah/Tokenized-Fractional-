@@ -15,10 +15,8 @@ import BuyShares from './components/BuyShares/BuyShares';
 import ToastContainer from './components/Toast/Toast';
 import ConfirmPurchase from './components/ConfirmPurchase/ConfirmPurchase';
 import LanguageSwitcher from './components/LanguageSwitcher/LanguageSwitcher';
-import ShortcutHelpModal from './components/ShortcutHelp/ShortcutHelp';
-import VirtualTour from './components/VirtualTour/VirtualTour';
-import EmptyState from './components/EmptyState/EmptyState';
-import OptimizedImage from './components/OptimizedImage/OptimizedImage';
+import TransactionHistory from './components/TransactionHistory/TransactionHistory';
+import ProfilePage from './components/ProfilePage/ProfilePage';
 import styles from './App.module.css';
 import Breadcrumbs from './components/Breadcrumbs/Breadcrumbs';
 import PriceRangeFilter from './components/PriceRangeFilter/PriceRangeFilter';
@@ -92,20 +90,8 @@ const NETWORK_PASSPHRASE = import.meta.env.VITE_NETWORK_PASSPHRASE || Networks.T
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 // Route path → Navbar view id mapping
-const PATH_TO_VIEW = {
-  '/': 'marketplace',
-  '/portfolio': 'portfolio',
-  '/admin': 'admin',
-  '/history': 'history',
-  '/profile': 'profile',
-};
-const VIEW_TO_PATH = {
-  marketplace: '/',
-  portfolio: '/portfolio',
-  admin: '/admin',
-  history: '/history',
-  profile: '/profile',
-};
+const PATH_TO_VIEW = { '/': 'marketplace', '/portfolio': 'portfolio', '/admin': 'admin', '/history': 'history', '/profile': 'profile' };
+const VIEW_TO_PATH = { marketplace: '/', portfolio: '/portfolio', admin: '/admin', history: '/history', profile: '/profile' };
 
 const MarketplacePage = React.memo(
   ({
@@ -713,16 +699,10 @@ function App() {
           History
         </button>
         <button
-          className={`${styles.tab} ${view === 'compare' ? styles.tabActive : ''}`}
-          onClick={() => setView('compare')}
+          className={`${styles.tab} ${view === 'profile' ? styles.tabActive : ''}`}
+          onClick={() => setView('profile')}
         >
-          Compare
-        </button>
-        <button
-          className={`${styles.tab} ${view === 'favorites' ? styles.tabActive : ''}`}
-          onClick={() => setView('favorites')}
-        >
-          ★ Favorites
+          Profile
         </button>
       </nav>
 
@@ -743,23 +723,25 @@ function App() {
 
       <ToastContainer />
 
-      <Suspense fallback={<LazyFallback />}>
-        {view === 'portfolio' ? (
-          <PortfolioPage />
-        ) : view === 'admin' ? (
-          <AdminPage publicKey={publicKey} onDisconnect={() => setView('marketplace')} />
-        ) : view === 'history' ? (
-          <TransactionHistory />
-        ) : view === 'compare' ? (
-          <AssetComparison />
-        ) : view === 'favorites' ? (
-          <FavoritesPage />
-        ) : view === 'profile' ? (
-          <UserProfile />
-        ) : (
-          <>
-            {/* Wallet errors (connection issues) */}
-            {walletError && <Alert variant="error">{walletError}</Alert>}
+      {view === 'portfolio' ? (
+        <PortfolioPage />
+      ) : view === 'admin' ? (
+        <AdminPage
+          publicKey={publicKey}
+          onDisconnect={() => setView('marketplace')}
+        />
+      ) : view === 'history' ? (
+        <TransactionHistory />
+      ) : view === 'profile' ? (
+        <ProfilePage />
+      ) : (
+        <>
+      {/* Wallet errors (connection issues) */}
+      {walletError && (
+        <Alert variant="error">
+          {walletError}
+        </Alert>
+      )}
 
             {/* Contract not configured */}
             {CONTRACT_ID === 'C...' && <Alert variant="warning">{CONTRACT_NOT_CONFIGURED}</Alert>}

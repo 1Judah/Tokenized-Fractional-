@@ -69,75 +69,22 @@ pub enum DataKey {
     AcceptedTokens,
     /// Optional NFT contract address for minting share certificates on buy
     NftContract,
-    /// Reentrancy guard flag for defense-in-depth protection
+    /// Transfer fee configuration
+    TransferFeeConfig,
+    /// Transfer history index
+    TransferHistoryIndex,
+    /// Transfer history entry by index
+    TransferHistory(u64),
+    /// Transfer restrictions for address
+    TransferRestrictions(Address),
+    /// Pending transfer approvals
+    PendingTransferApproval(u64),
+    /// Next transfer approval ID
+    NextTransferApprovalId,
+    /// Reentrancy guard
     ReentrancyGuard,
-    /// Issue #169: Price oracle contract address (optional)
-    OracleAddress,
-    /// Issue #170: Locked-for-bridge amount per user
-    BridgeLocked(Address),
-    /// SIP-4 metadata
-    ContractMetadata,
-    /// Issue #276: Flash loan protection configuration
-    FlashLoanGuardConfig,
-    /// Issue #276: Last trade ledger sequence per account for origin delay checks
-    LastTradeLedger(Address),
-    // ── Issue #309: Upgradeable Proxy Pattern ───────────────────────────
-    /// Current implementation version number
-    ImplementationVersion,
-    /// Pending upgrade proposal: new_wasm_hash, scheduled execution ledger
-    PendingUpgrade,
-    /// Timelock in ledger sequences before upgrade can execute
-    UpgradeTimelock,
-    /// Admin who proposed the upgrade
-    UpgradeProposer,
-    // ── Issue #310: Granular Pause Controls ─────────────────────────────
-    /// Per-function pause flags stored as a bitflag
-    /// Bit 0 = purchases, Bit 1 = transfers, Bit 2 = dividends, Bit 3 = sell orders
-    FunctionPauseFlags,
-    // ── Issue #311: Emergency Stop Mechanism ────────────────────────────
-    /// Circuit breaker configuration
-    CircuitBreakerConfig,
-    /// Whether circuit breaker is currently triggered
-    CircuitBreakerTriggered,
-    /// Circuit breaker trigger history counter
-    CircuitBreakerTriggerCount,
-    // ── Issue #312: State Recovery Functions ────────────────────────────
-    /// Whether state recovery snapshots are enabled
-    RecoveryEnabled,
-    /// Last snapshot ledger sequence
-    LastSnapshotLedger,
-    /// Number of snapshots taken
-    SnapshotCount,
-    // ── Issue #270: Whitelist enhancements ──────────────────────────────
-    /// Unix timestamp when whitelist entry expires (0 = never)
-    WhitelistExpiry(Address),
-    /// Whitelist tier: 0 = standard, 1 = premium, 2 = institutional
-    WhitelistTier(Address),
-    // ── Issue #263: Transfer fee mechanism ─────────────────────────────
-    /// Transfer fee in basis points (e.g. 30 = 0.30%)
-    TransferFeeBps,
-    /// Address that collects transfer fees
-    TransferFeeCollector,
-    // ── Issue #268: Buyback enhancement ────────────────────────────────
-    /// User-initiated buyback request by counter
-    BuybackRequest(u64),
-    /// Monotonic counter for buyback request IDs
-    BuybackRequestCounter,
-    // ── Issue #274: Purchase Limits ────────────────────────────────────────
-    /// Global purchase limit configuration
-    PurchaseLimitConfig,
-    /// User's purchase history for time-based limits
-    UserPurchaseHistory(Address),
-    /// Limit exemption status for an address
-    LimitExempt(Address),
-    /// Tier-specific limits configuration
-    TierLimits(u32),
-    /// Limit violation counter per user
-    LimitViolations(Address),
-    /// Limit change history counter
-    LimitHistoryCounter,
-    /// Limit change history entry by counter
-    LimitHistoryEntry(u64),
+    /// Compliance whitelist for transfers
+    TransferWhitelist(Address),
 }
 
 #[contracttype]
@@ -216,113 +163,42 @@ pub struct AutoBuybackConfig {
 
 #[contracttype]
 #[derive(Clone)]
-pub struct FlashLoanGuardConfig {
-    pub enabled: bool,
-    pub max_single_block_volume_pct: u32,
-    pub min_block_interval: u32,
-    pub override_active: bool,
+pub struct TransferFeeConfig {
+    /// Fee basis points (100 = 1%)
+    pub fee_bps: u32,
+    /// Fee recipient address
+    pub fee_recipient: Address,
+    /// Maximum fee in tokens
+    pub max_fee: i128,
 }
 
-/// Issue #309: Upgrade governance configuration
 #[contracttype]
 #[derive(Clone)]
-pub struct UpgradeConfig {
-    pub new_wasm_hash: BytesN<32>,
-    pub scheduled_ledger: u64,
-    pub proposer: Address,
-}
-
-/// Issue #311: Circuit breaker configuration
-#[contracttype]
-#[derive(Clone)]
-pub struct CircuitBreakerConfig {
-    pub enabled: bool,
-    /// Maximum percentage change allowed in a single block (basis points, 100 = 1%)
-    pub max_price_change_bps: u32,
-    /// Maximum number of shares that can be traded in a single block
-    pub max_volume_per_block: u32,
-    /// Whether the circuit breaker is currently armed (can trigger)
-    pub armed: bool,
-}
-
-/// Issue #274: Purchase limit configuration
-#[contracttype]
-#[derive(Clone)]
-pub struct PurchaseLimitConfig {
-    /// Maximum shares a user can hold (0 = no limit)
-    pub max_shares_per_user: u32,
-    /// Maximum total value a user can purchase (in smallest token unit, 0 = no limit)
-    pub max_value_per_user: i128,
-    /// Daily purchase limit in shares (0 = no limit)
-    pub daily_shares_limit: u32,
-    /// Daily purchase limit in value (0 = no limit)
-    pub daily_value_limit: i128,
-    /// Weekly purchase limit in shares (0 = no limit)
-    pub weekly_shares_limit: u32,
-    /// Weekly purchase limit in value (0 = no limit)
-    pub weekly_value_limit: i128,
-    /// Monthly purchase limit in shares (0 = no limit)
-    pub monthly_shares_limit: u32,
-    /// Monthly purchase limit in value (0 = no limit)
-    pub monthly_value_limit: i128,
-    /// Whether limits are enforced
-    pub enabled: bool,
-}
-
-/// Issue #274: User purchase history for time-based limits
-#[contracttype]
-#[derive(Clone)]
-pub struct UserPurchaseHistory {
-    /// Timestamp of last purchase
-    pub last_purchase_time: u64,
-    /// Shares purchased in current day
-    pub daily_shares: u32,
-    /// Value purchased in current day
-    pub daily_value: i128,
-    /// Start of current day (timestamp)
-    pub day_start: u64,
-    /// Shares purchased in current week
-    pub weekly_shares: u32,
-    /// Value purchased in current week
-    pub weekly_value: i128,
-    /// Start of current week (timestamp)
-    pub week_start: u64,
-    /// Shares purchased in current month
-    pub monthly_shares: u32,
-    /// Value purchased in current month
-    pub monthly_value: i128,
-    /// Start of current month (timestamp)
-    pub month_start: u64,
-}
-
-/// Issue #274: Tier-specific limits
-#[contracttype]
-#[derive(Clone)]
-pub struct TierLimits {
-    /// Maximum shares for this tier (0 = use global limit)
-    pub max_shares: u32,
-    /// Maximum value for this tier (0 = use global limit)
-    pub max_value: i128,
-    /// Daily shares multiplier (basis points, 10000 = 1x)
-    pub daily_shares_multiplier: u32,
-    /// Daily value multiplier (basis points, 10000 = 1x)
-    pub daily_value_multiplier: u32,
-}
-
-/// Issue #274: Limit change history entry
-#[contracttype]
-#[derive(Clone)]
-pub struct LimitHistoryEntry {
-    /// Timestamp of change
+pub struct TransferHistoryEntry {
+    pub from: Address,
+    pub to: Address,
+    pub amount: u32,
     pub timestamp: u64,
-    /// Type of limit changed
-    pub limit_type: u32,
-    /// Old value (as string for flexibility)
-    pub old_value: String,
-    /// New value (as string for flexibility)
-    pub new_value: String,
-    /// Admin who made the change
-    pub changed_by: Address,
+    pub fee_paid: i128,
+    pub tx_hash: BytesN<32>,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct TransferRestriction {
+    pub restricted_until: u64,
+    pub max_transfer_amount: u32,
+    pub requires_approval: bool,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct TransferApproval {
+    pub from: Address,
+    pub to: Address,
+    pub amount: u32,
+    pub requested_at: u64,
+    pub approved: bool,
 }
 
 #[contractevent(data_format = "vec")]
@@ -515,259 +391,6 @@ pub struct EventApproval {
     amount: u32,
 }
 
-// ── Issue #169: Oracle events ────────────────────────────────────────────────
-
-#[contractevent(data_format = "vec")]
-pub struct EventSetOracle {
-    oracle: Address,
-}
-
-#[contractevent(data_format = "vec")]
-pub struct EventOraclePriceFetched {
-    oracle: Address,
-    price: i128,
-}
-
-#[contractevent(data_format = "vec")]
-pub struct EventOraclePriceFallback {
-    admin_price: i128,
-}
-
-// ── Issue #309: Upgrade events ────────────────────────────────────────
-
-#[contractevent(data_format = "vec")]
-pub struct EventUpgradeScheduled {
-    new_wasm_hash: BytesN<32>,
-    execute_after: u64,
-    proposer: Address,
-}
-
-#[contractevent(data_format = "vec")]
-pub struct EventUpgradeExecuted {
-    old_version: u32,
-    new_version: u32,
-}
-
-#[contractevent(data_format = "vec")]
-pub struct EventUpgradeCancelled {
-    new_wasm_hash: BytesN<32>,
-}
-
-// ── Issue #310: Granular pause events ─────────────────────────────────
-
-#[contractevent(data_format = "vec")]
-pub struct EventFunctionPaused {
-    function_id: u32,
-}
-
-#[contractevent(data_format = "vec")]
-pub struct EventFunctionUnpaused {
-    function_id: u32,
-}
-
-// ── Issue #311: Circuit breaker events ────────────────────────────────
-
-#[contractevent(data_format = "vec")]
-pub struct EventCircuitBreakerConfigured {
-    enabled: bool,
-    max_price_change_bps: u32,
-    max_volume_per_block: u32,
-}
-
-#[contractevent(data_format = "vec")]
-pub struct EventCircuitBreakerTriggered {
-    trigger_reason: u32,
-    ledger: u64,
-}
-
-#[contractevent(data_format = "vec")]
-pub struct EventCircuitBreakerReset {
-    reset_by: Address,
-}
-
-// ── Issue #312: State recovery events ─────────────────────────────────
-
-#[contractevent(data_format = "vec")]
-pub struct EventStateSnapshotCreated {
-    snapshot_ledger: u64,
-    snapshot_id: u32,
-}
-
-#[contractevent(data_format = "vec")]
-pub struct EventStateRecovered {
-    from_snapshot: u32,
-    to_ledger: u64,
-}
-
-// ── Issue #170: Bridge events ────────────────────────────────────────────────
-
-#[contractevent(data_format = "vec")]
-pub struct EventLockForBridge {
-    user: Address,
-    amount: u32,
-    total_locked: u32,
-}
-
-#[contractevent(data_format = "vec")]
-pub struct EventUnlockFromBridge {
-    user: Address,
-    amount: u32,
-    proof: BytesN<32>,
-}
-
-// ── Issue #167: Events for previously-uncovered state changes ────────
-
-#[contractevent(data_format = "vec")]
-pub struct EventNftContractSet {
-    nft_contract: Address,
-}
-
-// ── Issue #270: Whitelist enhancement events ──────────────────────
-
-#[contractevent(data_format = "vec")]
-pub struct EventWhitelistBatch {
-    count: u32,
-    action: u32,
-}
-
-#[contractevent(data_format = "vec")]
-pub struct EventWhitelistExpirySet {
-    addr: Address,
-    expiry: u64,
-}
-
-#[contractevent(data_format = "vec")]
-pub struct EventWhitelistTierSet {
-    addr: Address,
-    tier: u32,
-}
-
-#[contractevent(data_format = "vec")]
-pub struct EventTransferFeeConfig {
-    fee_bps: u32,
-    collector: Address,
-}
-
-#[contractevent(data_format = "vec")]
-pub struct EventTransferFeeCollected {
-    from: Address,
-    amount: i128,
-    fee_collector: Address,
-}
-
-#[contractevent(data_format = "vec")]
-pub struct EventBuybackRequested {
-    request_id: u64,
-    seller: Address,
-    amount: u32,
-}
-
-// ── Issue #270: Whitelist info struct ──────────────────────────────
-
-/// Composite whitelist status returned by get_whitelist_info()
-#[contracttype]
-#[derive(Clone)]
-pub struct WhitelistInfo {
-    pub whitelisted: bool,
-    pub tier: u32,
-    pub expiry: u64,
-}
-
-// ── Issue #268: Buyback request struct ─────────────────────────────
-
-/// A user-submitted buyback request awaiting admin processing.
-#[contracttype]
-#[derive(Clone)]
-pub struct BuybackRequest {
-    pub request_id: u64,
-    pub seller: Address,
-    pub amount: u32,
-    pub requested_price: i128,
-    pub timestamp: u64,
-}
-
-#[contractevent(data_format = "vec")]
-pub struct EventWhitelisted {
-    addr: Address,
-}
-
-#[contractevent(data_format = "vec")]
-pub struct EventWhitelistRemoved {
-    addr: Address,
-}
-
-#[contractevent(data_format = "vec")]
-pub struct EventMetadataUriSet {
-    uri: Bytes,
-}
-
-#[contractevent(data_format = "vec")]
-pub struct EventClaimVestedShares {
-    claimer: Address,
-    amount: u32,
-}
-
-// ── Issue #262: Batch purchase types and events ──────────────────────
-
-/// A single purchase request within a batch.
-#[contracttype]
-#[derive(Clone)]
-pub struct BatchPurchaseRequest {
-    /// Number of shares to purchase in this item.
-    pub shares: u32,
-    /// Payment token address to use for this item.
-    pub payment_token: Address,
-}
-
-/// Result for a single item in a batch purchase.
-#[contracttype]
-#[derive(Clone)]
-pub struct BatchPurchaseResult {
-    /// Index of the request in the batch (0-based).
-    pub index: u32,
-    /// Whether this item succeeded.
-    pub success: bool,
-    /// Shares actually purchased (0 if failed).
-    pub shares_purchased: u32,
-    /// Total cost paid (0 if failed).
-    pub total_cost: i128,
-}
-
-/// Emitted once per successful batch_buy_shares call.
-#[contractevent(data_format = "vec")]
-pub struct EventBatchBuyShares {
-    buyer: Address,
-    total_items: u32,
-    successful_items: u32,
-    total_shares: u32,
-    total_cost: i128,
-}
-
-/// Emitted for each individual item that fails within a batch.
-#[contractevent(data_format = "vec")]
-pub struct EventBatchPurchaseItemFailed {
-    buyer: Address,
-    index: u32,
-    shares_requested: u32,
-}
-
-// ── Issue #167: Timelock events ─────────────────────────────────────
-
-#[contractevent(data_format = "vec")]
-pub struct EventOperationScheduled {
-    action: AdminAction,
-    execute_after: u64,
-}
-
-#[contractevent(data_format = "vec")]
-pub struct EventOperationCancelled {
-    action: AdminAction,
-}
-
-#[contractevent(data_format = "vec")]
-pub struct EventOperationExecuted {
-    action: AdminAction,
-}
 
 // ── OVERFLOW-SAFE MATH HELPERS ──────────────────────────────────────
 /// Safely add two i128 values, panicking on overflow
@@ -795,624 +418,73 @@ fn checked_sub_u32(a: u32, b: u32) -> u32 {
     a.checked_sub(b).unwrap_or_else(|| panic!("Arithmetic underflow: cannot subtract {} from {}", b, a))
 }
 
-fn _load_dividend_policy(env: &Env) -> Option<DividendPolicy> {
-    env.storage().instance().get(&DataKey::DividendPolicy)
-}
-
-fn _validate_dividend_type(dividend_type: u32) {
-    if !matches!(dividend_type, DIVIDEND_TYPE_CASH | DIVIDEND_TYPE_TOKEN_BASED) {
-        panic!("Unsupported dividend type");
+/// Reentrancy guard - set to true when entering a function, false when exiting
+fn reentrancy_guard_enter(env: &Env) {
+    if env.storage().instance().get(&DataKey::ReentrancyGuard).unwrap_or(false) {
+        panic!("Reentrancy detected");
     }
+    env.storage().instance().set(&DataKey::ReentrancyGuard, &true);
 }
 
-fn _resolve_dividend_policy(env: &Env, fallback_token: &Address) -> DividendPolicy {
-    _load_dividend_policy(env).unwrap_or_else(|| DividendPolicy {
-        dividend_type: DIVIDEND_TYPE_CASH,
-        payout_token: fallback_token.clone(),
-        withholding_bps: 0,
-        reinvestment_enabled: false,
-    })
+fn reentrancy_guard_exit(env: &Env) {
+    env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
 }
 
-fn _calculate_pro_rata_amount(total_amount: i128, holder_shares: u32, total_shares: u32) -> i128 {
-    if total_amount <= 0 || holder_shares == 0 || total_shares == 0 {
-        return 0;
+/// Check if an address is transfer-whitelisted
+fn is_transfer_whitelisted(env: &Env, addr: &Address) -> bool {
+    env.storage().persistent().get(&DataKey::TransferWhitelist(addr.clone())).unwrap_or(true)
+}
+
+/// Calculate transfer fee based on configuration
+fn calculate_transfer_fee(env: &Env, amount: u32, price_per_share: i128) -> i128 {
+    if let Some(config) = env.storage().instance().get::<DataKey, TransferFeeConfig>(&DataKey::TransferFeeConfig) {
+        let transfer_value = checked_mul_i128(amount as i128, price_per_share);
+        let fee = (transfer_value * config.fee_bps as i128) / 10000;
+        if config.max_fee > 0 && fee > config.max_fee {
+            return config.max_fee;
+        }
+        return fee;
     }
-    checked_mul_i128(total_amount, holder_shares as i128) / (total_shares as i128)
+    0
 }
 
-fn _load_dividend_position(env: &Env, owner: &Address) -> DividendPosition {
-    env.storage()
-        .persistent()
-        .get(&DataKey::DividendPosition(owner.clone()))
-        .unwrap_or_else(|| DividendPosition {
-            accrued_amount: 0,
-            claimed_amount: 0,
-            reinvestment_enabled: false,
-            last_update_ledger: 0,
-        })
-}
-
-fn _store_dividend_position(env: &Env, owner: &Address, position: &DividendPosition) {
-    env.storage()
-        .persistent()
-        .set(&DataKey::DividendPosition(owner.clone()), position);
-}
-
-fn _load_dividend_history(env: &Env) -> Vec<DividendHistoryEntry> {
-    env.storage()
-        .instance()
-        .get(&DataKey::DividendHistory)
-        .unwrap_or_else(|| Vec::new(env))
-}
-
-fn _store_dividend_history(env: &Env, history: &Vec<DividendHistoryEntry>) {
-    env.storage().instance().set(&DataKey::DividendHistory, history);
-}
-
-fn _get_next_dividend_history_id(env: &Env) -> u64 {
-    let current: u64 = env
-        .storage()
-        .instance()
-        .get(&DataKey::DividendHistoryCounter)
-        .unwrap_or(0);
-    let next = current.saturating_add(1);
-    env.storage().instance().set(&DataKey::DividendHistoryCounter, &next);
-    next
-}
-
-// ── Issue #313: Gas Optimization Helpers (removed - unused, caused SDK trait bound issues)
-fn _get_admin(env: &Env) -> Address {
-    env.storage()
-        .instance()
-        .get(&DataKey::Admin)
-        .expect("Contract not initialized: admin")
-}
-
-/// Re-entrancy guard helper: check and set the guard flag to prevent re-entrant calls.
-/// This is a defense-in-depth measure to protect functions that make external calls.
-/// The flag is stored in instance storage and cleared after the operation completes.
-fn _check_non_reentrant(env: &Env) {
-    if env
-        .storage()
-        .instance()
-        .get::<DataKey, bool>(&DataKey::ReentrancyGuard)
-        .unwrap_or(false)
-    {
-        panic!("Re-entrancy detected: contract is already executing");
-    }
-    _set_non_reentrant(env, true);
-}
-
-/// Set the re-entrancy guard flag. Pass `true` to lock, `false` to unlock.
-fn _set_non_reentrant(env: &Env, value: bool) {
-    env.storage().instance().set(&DataKey::ReentrancyGuard, &value);
-}
-
-// ── Issue #310: Granular pause helpers ────────────────────────────────
-/// Function IDs for granular pause control (bit positions)
-const FN_BUY_SHARES: u32 = 0;
-const FN_TRANSFER: u32 = 1;
-const FN_DIVIDEND: u32 = 2;
-const FN_SELL_ORDER: u32 = 3;
-const FN_BUYBACK: u32 = 4;
-const FN_TRANSFER_FROM: u32 = 5;
-
-/// Check if a specific function is paused via the bitflag.
-fn _is_function_paused(env: &Env, fn_id: u32) -> bool {
-    let flags: u32 = env
-        .storage()
-        .instance()
-        .get::<DataKey, u32>(&DataKey::FunctionPauseFlags)
-        .unwrap_or(0);
-    (flags & (1u32 << fn_id)) != 0
-}
-
-/// Set or clear the pause bit for a specific function.
-fn _set_function_paused(env: &Env, fn_id: u32, paused: bool) {
-    let mut flags: u32 = env
-        .storage()
-        .instance()
-        .get::<DataKey, u32>(&DataKey::FunctionPauseFlags)
-        .unwrap_or(0);
-    if paused {
-        flags |= 1u32 << fn_id;
-    } else {
-        flags &= !(1u32 << fn_id);
-    }
-    env.storage().instance().set(&DataKey::FunctionPauseFlags, &flags);
-}
-
-// ── Issue #311: Circuit breaker helpers ───────────────────────────────
-/// Check if circuit breaker is currently triggered.
-fn _is_circuit_breaker_triggered(env: &Env) -> bool {
-    env.storage()
-        .instance()
-        .get::<DataKey, bool>(&DataKey::CircuitBreakerTriggered)
-        .unwrap_or(false)
-}
-
-/// Require that the circuit breaker has not tripped.
-fn _require_circuit_breaker_clear(env: &Env) {
-    if _is_circuit_breaker_triggered(env) {
-        panic!("Circuit breaker is active: operations halted for safety");
-    }
-}
-
-// ── Issue #270: Whitelist validation helper ───────────────────────────
-/// Validate that `addr` is whitelisted and the entry has not expired.
-/// Panics with a descriptive message on failure.
-fn _validate_whitelist(env: &Env, addr: &Address) {
-    // Check basic whitelist flag
-    if !env
-        .storage()
-        .persistent()
-        .get::<DataKey, bool>(&DataKey::Whitelisted(addr.clone()))
-        .unwrap_or(false)
-    {
-        panic!("Address is not whitelisted");
-    }
-
-    // Check whitelist expiration (0 = never expires)
-    let expiry: u64 = env
-        .storage()
-        .persistent()
-        .get::<DataKey, u64>(&DataKey::WhitelistExpiry(addr.clone()))
-        .unwrap_or(0);
-    if expiry > 0 {
+/// Check transfer restrictions for an address
+fn check_transfer_restrictions(env: &Env, from: &Address, amount: u32) {
+    if let Some(restriction) = env.storage().persistent().get::<DataKey, TransferRestriction>(&DataKey::TransferRestrictions(from.clone())) {
         let now = env.ledger().timestamp();
-        if now >= expiry {
-            panic!("Whitelist entry has expired");
+        if now < restriction.restricted_until {
+            panic!("Transfer restricted until timestamp {}", restriction.restricted_until);
+        }
+        if restriction.max_transfer_amount > 0 && amount > restriction.max_transfer_amount {
+            panic!("Transfer amount exceeds maximum allowed of {}", restriction.max_transfer_amount);
+        }
+        if restriction.requires_approval {
+            panic!("Transfer requires prior approval");
         }
     }
 }
 
-// ── Issue #274: Purchase limit validation helpers ──────────────────────
-
-/// Limit type constants for event logging
-const LIMIT_TYPE_MAX_SHARES: u32 = 1;
-const LIMIT_TYPE_MAX_VALUE: u32 = 2;
-const LIMIT_TYPE_DAILY_SHARES: u32 = 3;
-const LIMIT_TYPE_DAILY_VALUE: u32 = 4;
-const LIMIT_TYPE_WEEKLY_SHARES: u32 = 5;
-const LIMIT_TYPE_WEEKLY_VALUE: u32 = 6;
-const LIMIT_TYPE_MONTHLY_SHARES: u32 = 7;
-const LIMIT_TYPE_MONTHLY_VALUE: u32 = 8;
-
-/// Validate purchase limits before allowing a purchase.
-/// Returns updated purchase history if validation passes.
-fn _validate_purchase_limits(
-    env: &Env,
-    buyer: &Address,
-    shares: u32,
-    value: i128,
-) -> UserPurchaseHistory {
-    // Check if limits are enabled
-    let config: PurchaseLimitConfig = env
-        .storage()
-        .instance()
-        .get(&DataKey::PurchaseLimitConfig)
-        .unwrap_or_else(|| PurchaseLimitConfig {
-            max_shares_per_user: 0,
-            max_value_per_user: 0,
-            daily_shares_limit: 0,
-            daily_value_limit: 0,
-            weekly_shares_limit: 0,
-            weekly_value_limit: 0,
-            monthly_shares_limit: 0,
-            monthly_value_limit: 0,
-            enabled: false,
-        });
-
-    // If limits are disabled, return early
-    if !config.enabled {
-        return UserPurchaseHistory {
-            last_purchase_time: env.ledger().timestamp(),
-            daily_shares: 0,
-            daily_value: 0,
-            day_start: 0,
-            weekly_shares: 0,
-            weekly_value: 0,
-            week_start: 0,
-            monthly_shares: 0,
-            monthly_value: 0,
-            month_start: 0,
-        };
-    }
-
-    // Check if user is exempt from limits
-    if env
-        .storage()
-        .persistent()
-        .get::<DataKey, bool>(&DataKey::LimitExempt(buyer.clone()))
-        .unwrap_or(false)
-    {
-        return UserPurchaseHistory {
-            last_purchase_time: env.ledger().timestamp(),
-            daily_shares: 0,
-            daily_value: 0,
-            day_start: 0,
-            weekly_shares: 0,
-            weekly_value: 0,
-            week_start: 0,
-            monthly_shares: 0,
-            monthly_value: 0,
-            month_start: 0,
-        };
-    }
-
-    // Get user's whitelist tier for tier-specific limits
-    let tier: u32 = env
-        .storage()
-        .persistent()
-        .get(&DataKey::WhitelistTier(buyer.clone()))
-        .unwrap_or(0);
-
-    let tier_limits: TierLimits = env
-        .storage()
-        .instance()
-        .get(&DataKey::TierLimits(tier))
-        .unwrap_or_else(|| TierLimits {
-            max_shares: 0,
-            max_value: 0,
-            daily_shares_multiplier: 10000,
-            daily_value_multiplier: 10000,
-        });
-
-    // Determine effective limits (tier-specific or global)
-    let effective_max_shares = if tier_limits.max_shares > 0 {
-        tier_limits.max_shares
-    } else {
-        config.max_shares_per_user
+/// Record transfer in history
+fn record_transfer_history(env: &Env, from: Address, to: Address, amount: u32, fee_paid: i128, tx_hash: BytesN<32>) {
+    let index: u64 = env.storage().instance().get(&DataKey::TransferHistoryIndex).unwrap_or(0);
+    let entry = TransferHistoryEntry {
+        from,
+        to,
+        amount,
+        timestamp: env.ledger().timestamp(),
+        fee_paid,
+        tx_hash,
     };
-
-    let effective_max_value = if tier_limits.max_value > 0 {
-        tier_limits.max_value
-    } else {
-        config.max_value_per_user
-    };
-
-    // Check maximum shares limit
-    let current_balance: u32 = env
-        .storage()
-        .persistent()
-        .get(&DataKey::Balance(buyer.clone()))
-        .unwrap_or(0);
-    let prospective_balance = checked_add_u32(current_balance, shares);
-
-    if effective_max_shares > 0 && prospective_balance > effective_max_shares {
-        // Increment violation counter
-        let violations = env
-            .storage()
-            .persistent()
-            .get::<DataKey, u32>(&DataKey::LimitViolations(buyer.clone()))
-            .unwrap_or(0);
-        env.storage()
-            .persistent()
-            .set(&DataKey::LimitViolations(buyer.clone()), &(violations + 1));
-
-        EventLimitViolation {
-            user: buyer.clone(),
-            limit_type: LIMIT_TYPE_MAX_SHARES,
-            attempted_value: prospective_balance as i128,
-            limit_value: effective_max_shares as i128,
-        }
-        .publish(env);
-
-        panic!("Purchase exceeds maximum shares limit");
-    }
-
-    // Check maximum value limit
-    let current_total_value = _get_user_total_purchased_value(env, buyer);
-    let prospective_total_value = current_total_value + value;
-
-    if effective_max_value > 0 && prospective_total_value > effective_max_value {
-        let violations = env
-            .storage()
-            .persistent()
-            .get::<DataKey, u32>(&DataKey::LimitViolations(buyer.clone()))
-            .unwrap_or(0);
-        env.storage()
-            .persistent()
-            .set(&DataKey::LimitViolations(buyer.clone()), &(violations + 1));
-
-        EventLimitViolation {
-            user: buyer.clone(),
-            limit_type: LIMIT_TYPE_MAX_VALUE,
-            attempted_value: prospective_total_value,
-            limit_value: effective_max_value,
-        }
-        .publish(env);
-
-        panic!("Purchase exceeds maximum value limit");
-    }
-
-    // Get and update purchase history for time-based limits
-    let mut history = env
-        .storage()
-        .persistent()
-        .get(&DataKey::UserPurchaseHistory(buyer.clone()))
-        .unwrap_or_else(|| UserPurchaseHistory {
-            last_purchase_time: 0,
-            daily_shares: 0,
-            daily_value: 0,
-            day_start: 0,
-            weekly_shares: 0,
-            weekly_value: 0,
-            week_start: 0,
-            monthly_shares: 0,
-            monthly_value: 0,
-            month_start: 0,
-        });
-
-    let now = env.ledger().timestamp();
-    let seconds_per_day = 86400u64;
-    let seconds_per_week = 604800u64;
-    let seconds_per_month = 2592000u64; // 30 days
-
-    // Reset daily counters if needed
-    if history.day_start == 0 || now - history.day_start >= seconds_per_day {
-        history.daily_shares = 0;
-        history.daily_value = 0;
-        history.day_start = now;
-    }
-
-    // Reset weekly counters if needed
-    if history.week_start == 0 || now - history.week_start >= seconds_per_week {
-        history.weekly_shares = 0;
-        history.weekly_value = 0;
-        history.week_start = now;
-    }
-
-    // Reset monthly counters if needed
-    if history.month_start == 0 || now - history.month_start >= seconds_per_month {
-        history.monthly_shares = 0;
-        history.monthly_value = 0;
-        history.month_start = now;
-    }
-
-    // Apply tier multipliers to time-based limits
-    let effective_daily_shares = if config.daily_shares_limit > 0 {
-        (config.daily_shares_limit as i128 * tier_limits.daily_shares_multiplier as i128) / 10000
-    } else {
-        0
-    };
-
-    let effective_daily_value = if config.daily_value_limit > 0 {
-        config.daily_value_limit * tier_limits.daily_value_multiplier as i128 / 10000
-    } else {
-        0
-    };
-
-    // Check daily limits
-    if effective_daily_shares > 0 {
-        let prospective_daily = history.daily_shares + shares;
-        if prospective_daily > effective_daily_shares as u32 {
-            let violations = env
-                .storage()
-                .persistent()
-                .get::<DataKey, u32>(&DataKey::LimitViolations(buyer.clone()))
-                .unwrap_or(0);
-            env.storage()
-                .persistent()
-                .set(&DataKey::LimitViolations(buyer.clone()), &(violations + 1));
-
-            EventLimitViolation {
-                user: buyer.clone(),
-                limit_type: LIMIT_TYPE_DAILY_SHARES,
-                attempted_value: prospective_daily as i128,
-                limit_value: effective_daily_shares,
-            }
-            .publish(env);
-
-            panic!("Purchase exceeds daily shares limit");
-        }
-    }
-
-    if effective_daily_value > 0 {
-        let prospective_daily_value = history.daily_value + value;
-        if prospective_daily_value > effective_daily_value {
-            let violations = env
-                .storage()
-                .persistent()
-                .get::<DataKey, u32>(&DataKey::LimitViolations(buyer.clone()))
-                .unwrap_or(0);
-            env.storage()
-                .persistent()
-                .set(&DataKey::LimitViolations(buyer.clone()), &(violations + 1));
-
-            EventLimitViolation {
-                user: buyer.clone(),
-                limit_type: LIMIT_TYPE_DAILY_VALUE,
-                attempted_value: prospective_daily_value,
-                limit_value: effective_daily_value,
-            }
-            .publish(env);
-
-            panic!("Purchase exceeds daily value limit");
-        }
-    }
-
-    // Check weekly limits
-    if config.weekly_shares_limit > 0 {
-        let prospective_weekly = history.weekly_shares + shares;
-        if prospective_weekly > config.weekly_shares_limit {
-            let violations = env
-                .storage()
-                .persistent()
-                .get::<DataKey, u32>(&DataKey::LimitViolations(buyer.clone()))
-                .unwrap_or(0);
-            env.storage()
-                .persistent()
-                .set(&DataKey::LimitViolations(buyer.clone()), &(violations + 1));
-
-            EventLimitViolation {
-                user: buyer.clone(),
-                limit_type: LIMIT_TYPE_WEEKLY_SHARES,
-                attempted_value: prospective_weekly as i128,
-                limit_value: config.weekly_shares_limit as i128,
-            }
-            .publish(env);
-
-            panic!("Purchase exceeds weekly shares limit");
-        }
-    }
-
-    if config.weekly_value_limit > 0 {
-        let prospective_weekly_value = history.weekly_value + value;
-        if prospective_weekly_value > config.weekly_value_limit {
-            let violations = env
-                .storage()
-                .persistent()
-                .get::<DataKey, u32>(&DataKey::LimitViolations(buyer.clone()))
-                .unwrap_or(0);
-            env.storage()
-                .persistent()
-                .set(&DataKey::LimitViolations(buyer.clone()), &(violations + 1));
-
-            EventLimitViolation {
-                user: buyer.clone(),
-                limit_type: LIMIT_TYPE_WEEKLY_VALUE,
-                attempted_value: prospective_weekly_value,
-                limit_value: config.weekly_value_limit,
-            }
-            .publish(env);
-
-            panic!("Purchase exceeds weekly value limit");
-        }
-    }
-
-    // Check monthly limits
-    if config.monthly_shares_limit > 0 {
-        let prospective_monthly = history.monthly_shares + shares;
-        if prospective_monthly > config.monthly_shares_limit {
-            let violations = env
-                .storage()
-                .persistent()
-                .get::<DataKey, u32>(&DataKey::LimitViolations(buyer.clone()))
-                .unwrap_or(0);
-            env.storage()
-                .persistent()
-                .set(&DataKey::LimitViolations(buyer.clone()), &(violations + 1));
-
-            EventLimitViolation {
-                user: buyer.clone(),
-                limit_type: LIMIT_TYPE_MONTHLY_SHARES,
-                attempted_value: prospective_monthly as i128,
-                limit_value: config.monthly_shares_limit as i128,
-            }
-            .publish(env);
-
-            panic!("Purchase exceeds monthly shares limit");
-        }
-    }
-
-    if config.monthly_value_limit > 0 {
-        let prospective_monthly_value = history.monthly_value + value;
-        if prospective_monthly_value > config.monthly_value_limit {
-            let violations = env
-                .storage()
-                .persistent()
-                .get::<DataKey, u32>(&DataKey::LimitViolations(buyer.clone()))
-                .unwrap_or(0);
-            env.storage()
-                .persistent()
-                .set(&DataKey::LimitViolations(buyer.clone()), &(violations + 1));
-
-            EventLimitViolation {
-                user: buyer.clone(),
-                limit_type: LIMIT_TYPE_MONTHLY_VALUE,
-                attempted_value: prospective_monthly_value,
-                limit_value: config.monthly_value_limit,
-            }
-            .publish(env);
-
-            panic!("Purchase exceeds monthly value limit");
-        }
-    }
-
-    // Update purchase history with the new purchase
-    history.daily_shares += shares;
-    history.daily_value += value;
-    history.weekly_shares += shares;
-    history.weekly_value += value;
-    history.monthly_shares += shares;
-    history.monthly_value += value;
-    history.last_purchase_time = now;
-
-    history
+    env.storage().persistent().set(&DataKey::TransferHistory(index), &entry);
+    env.storage().instance().set(&DataKey::TransferHistoryIndex, &(index + 1));
 }
 
-/// Get the total value purchased by a user (for max value limit tracking).
-/// This is a simplified version - in production, you'd want to track this more carefully.
-fn _get_user_total_purchased_value(env: &Env, user: &Address) -> i128 {
-    // For now, we'll estimate based on current balance and price
-    // In production, you'd want to track cumulative purchases separately
-    let balance: u32 = env
-        .storage()
-        .persistent()
-        .get(&DataKey::Balance(user.clone()))
-        .unwrap_or(0);
-    
-    let price: i128 = _get_current_price(env);
-    balance as i128 * price
-}
-
-/// Update user's purchase history after a successful purchase.
-fn _update_purchase_history(env: &Env, buyer: &Address, history: UserPurchaseHistory) {
-    env.storage()
-        .persistent()
-        .set(&DataKey::UserPurchaseHistory(buyer.clone()), &history);
-}
-
-/// Check whitelist without panicking — returns (is_whitelisted, tier, expiry).
-fn _get_whitelist_info(env: &Env, addr: &Address) -> WhitelistInfo {
-    let whitelisted = env
-        .storage()
-        .persistent()
-        .get::<DataKey, bool>(&DataKey::Whitelisted(addr.clone()))
-        .unwrap_or(false);
-    let tier: u32 = env
-        .storage()
-        .persistent()
-        .get::<DataKey, u32>(&DataKey::WhitelistTier(addr.clone()))
-        .unwrap_or(0);
-    let expiry: u64 = env
-        .storage()
-        .persistent()
-        .get::<DataKey, u64>(&DataKey::WhitelistExpiry(addr.clone()))
-        .unwrap_or(0);
-    WhitelistInfo { whitelisted, tier, expiry }
-}
-
-// ── Issue #268: Oracle-aware price helper ─────────────────────────────
-/// Fetch the current share price. If an oracle is configured, attempt to
-/// read from it; fall back to the admin-set price on any failure.
-fn _get_current_price(env: &Env) -> i128 {
-    let admin_price: i128 = env
-        .storage()
-        .instance()
-        .get(&DataKey::PricePerShare)
-        .expect("Contract not initialized: price");
-
-    if let Some(oracle_addr) = env
-        .storage()
-        .instance()
-        .get::<DataKey, Address>(&DataKey::OracleAddress)
-    {
-        let oracle_client = OracleContractClient::new(env, &oracle_addr);
-        match oracle_client.try_get_price() {
-            Ok(Ok(p)) if p > 0 => {
-                EventOraclePriceFetched { oracle: oracle_addr, price: p }.publish(env);
-                return p;
-            }
-            _ => {
-                EventOraclePriceFallback { admin_price }.publish(env);
-            }
-        }
+/// Check vesting restrictions - only liquid (non-vested) shares can be transferred
+fn check_vesting_restrictions(env: &Env, owner: &Address, amount: u32) {
+    let liquid_balance: u32 = env.storage().persistent().get(&DataKey::Balance(owner.clone())).unwrap_or(0);
+    if amount > liquid_balance {
+        panic!("Cannot transfer vested shares. Only liquid shares can be transferred.");
     }
-
-    admin_price
 }
 
 #[contractimpl]
@@ -3213,8 +2285,9 @@ impl RwaMarketplace {
     }
 
     /// Transfer `amount` shares from caller to `to`. Requires caller auth.
-    /// Enforces whitelist validation on the recipient and reentrancy protection.
+    /// Includes transfer restrictions, fee calculation, and history tracking.
     pub fn transfer_shares(env: Env, from: Address, to: Address, amount: u32) {
+        reentrancy_guard_enter(&env);
         from.require_auth();
 
         // Re-entrancy guard: protect balance updates
@@ -3234,8 +2307,21 @@ impl RwaMarketplace {
             panic!("Transfer amount must be positive");
         }
 
-        // Issue #270: Validate recipient is whitelisted
-        _validate_whitelist(&env, &to);
+        // Check whitelist compliance
+        if !Self::is_whitelisted(env.clone(), from.clone()) || !Self::is_whitelisted(env.clone(), to.clone()) {
+            panic!("Both parties must be whitelisted for transfers");
+        }
+
+        // Check transfer whitelist
+        if !is_transfer_whitelisted(&env, &from) || !is_transfer_whitelisted(&env, &to) {
+            panic!("Transfer not allowed for one or both parties");
+        }
+
+        // Check vesting restrictions
+        check_vesting_restrictions(&env, &from, amount);
+
+        // Check transfer restrictions
+        check_transfer_restrictions(&env, &from, amount);
 
         let from_balance: u32 = env
             .storage()
@@ -3254,6 +2340,20 @@ impl RwaMarketplace {
             .get(&DataKey::Balance(to.clone()))
             .unwrap_or(0);
 
+        // Calculate and collect transfer fee
+        let price: i128 = env.storage().instance().get(&DataKey::PricePerShare)
+            .expect("Contract not initialized: price");
+        let fee = calculate_transfer_fee(&env, amount, price);
+        
+        if fee > 0 {
+            if let Some(config) = env.storage().instance().get::<DataKey, TransferFeeConfig>(&DataKey::TransferFeeConfig) {
+                let token_id: Address = env.storage().instance().get(&DataKey::PaymentToken)
+                    .expect("Contract not initialized: payment token");
+                let client = token::TokenClient::new(&env, &token_id);
+                client.transfer(&from, &config.fee_recipient, &fee);
+            }
+        }
+
         env.storage()
             .persistent()
             .set(&DataKey::Balance(from.clone()), &checked_sub_u32(from_balance, amount));
@@ -3263,15 +2363,18 @@ impl RwaMarketplace {
 
         Self::register_holder(&env, to.clone());
 
-        _set_non_reentrant(&env, false);
+        // Record transfer history
+        let tx_hash: BytesN<32> = BytesN::from_array(&env, &[0; 32]); // Placeholder for actual tx hash
+        record_transfer_history(&env, from.clone(), to.clone(), amount, fee, tx_hash);
 
         EventTransfer { from, to, amount }.publish(&env);
+        reentrancy_guard_exit(&env);
     }
 
     /// Transfer `amount` shares from `from` to `to` using an allowance. Requires spender auth.
-    /// Includes reentrancy protection, whitelist validation, granular pause, circuit breaker,
-    /// and transfer fee collection.
+    /// Includes transfer restrictions, fee calculation, and history tracking.
     pub fn transfer_shares_from(env: Env, spender: Address, from: Address, to: Address, amount: u32) {
+        reentrancy_guard_enter(&env);
         spender.require_auth();
 
         // Re-entrancy guard
@@ -3306,6 +2409,22 @@ impl RwaMarketplace {
             panic!("Transfer amount exceeds allowance");
         }
 
+        // Check whitelist compliance
+        if !Self::is_whitelisted(env.clone(), from.clone()) || !Self::is_whitelisted(env.clone(), to.clone()) {
+            panic!("Both parties must be whitelisted for transfers");
+        }
+
+        // Check transfer whitelist
+        if !is_transfer_whitelisted(&env, &from) || !is_transfer_whitelisted(&env, &to) {
+            panic!("Transfer not allowed for one or both parties");
+        }
+
+        // Check vesting restrictions
+        check_vesting_restrictions(&env, &from, amount);
+
+        // Check transfer restrictions
+        check_transfer_restrictions(&env, &from, amount);
+
         let from_balance: u32 = env
             .storage()
             .persistent()
@@ -3323,30 +2442,17 @@ impl RwaMarketplace {
             .get(&DataKey::Balance(to.clone()))
             .unwrap_or(0);
 
-        // ── Issue #263: Transfer fee collection ────────────────────────
-        let fee_bps: u32 = env
-            .storage()
-            .instance()
-            .get::<DataKey, u32>(&DataKey::TransferFeeBps)
-            .unwrap_or(0);
-        if fee_bps > 0 {
-            let fee_collector: Address = env
-                .storage()
-                .instance()
-                .get(&DataKey::TransferFeeCollector)
-                .expect("Transfer fee collector not configured");
-            let price: i128 = _get_current_price(&env);
-            let transfer_value = checked_mul_i128(price, amount as i128);
-            let fee_amount = checked_mul_i128(transfer_value, fee_bps as i128) / 10000i128;
-            if fee_amount > 0 {
-                let token_id: Address = env
-                    .storage()
-                    .instance()
-                    .get(&DataKey::PaymentToken)
+        // Calculate and collect transfer fee
+        let price: i128 = env.storage().instance().get(&DataKey::PricePerShare)
+            .expect("Contract not initialized: price");
+        let fee = calculate_transfer_fee(&env, amount, price);
+        
+        if fee > 0 {
+            if let Some(config) = env.storage().instance().get::<DataKey, TransferFeeConfig>(&DataKey::TransferFeeConfig) {
+                let token_id: Address = env.storage().instance().get(&DataKey::PaymentToken)
                     .expect("Contract not initialized: payment token");
-                token::TokenClient::new(&env, &token_id)
-                    .transfer(&spender, &fee_collector, &fee_amount);
-                EventTransferFeeCollected { from: from.clone(), amount: fee_amount, fee_collector }.publish(&env);
+                let client = token::TokenClient::new(&env, &token_id);
+                client.transfer(&from, &config.fee_recipient, &fee);
             }
         }
 
@@ -3364,9 +2470,12 @@ impl RwaMarketplace {
 
         Self::register_holder(&env, to.clone());
 
-        _set_non_reentrant(&env, false);
+        // Record transfer history
+        let tx_hash: BytesN<32> = BytesN::from_array(&env, &[0; 32]); // Placeholder for actual tx hash
+        record_transfer_history(&env, from.clone(), to.clone(), amount, fee, tx_hash);
 
         EventTransfer { from, to, amount }.publish(&env);
+        reentrancy_guard_exit(&env);
     }
 
     /// List `amount` of the caller's liquid shares for sale at `price_per_share`.
@@ -3483,6 +2592,234 @@ impl RwaMarketplace {
     /// Get an open sell order by id, returning None if it doesn't exist.
     pub fn get_sell_order(env: Env, order_id: u64) -> Option<SellOrder> {
         env.storage().persistent().get(&DataKey::SellOrder(order_id))
+    }
+
+    // ── Secure Transfer Functions ───────────────────────────────────────────
+
+    /// Set transfer fee configuration. Admin only.
+    pub fn set_transfer_fee_config(env: Env, fee_bps: u32, fee_recipient: Address, max_fee: i128) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin)
+            .expect("Contract not initialized: admin");
+        admin.require_auth();
+
+        if fee_bps > 10000 {
+            panic!("Fee basis points cannot exceed 10000 (100%)");
+        }
+        if max_fee < 0 {
+            panic!("Max fee cannot be negative");
+        }
+
+        let config = TransferFeeConfig { fee_bps, fee_recipient: fee_recipient.clone(), max_fee };
+        env.storage().instance().set(&DataKey::TransferFeeConfig, &config);
+    }
+
+    /// Get current transfer fee configuration.
+    pub fn get_transfer_fee_config(env: Env) -> Option<TransferFeeConfig> {
+        env.storage().instance().get(&DataKey::TransferFeeConfig)
+    }
+
+    /// Batch transfer shares to multiple recipients. Requires from auth.
+    pub fn batch_transfer(env: Env, from: Address, recipients: Vec<Address>, amounts: Vec<u32>) {
+        reentrancy_guard_enter(&env);
+        from.require_auth();
+
+        if recipients.is_empty() {
+            panic!("Recipients list cannot be empty");
+        }
+        if recipients.len() != amounts.len() {
+            panic!("Recipients and amounts must have the same length");
+        }
+
+        // Check whitelist compliance for sender
+        if !Self::is_whitelisted(env.clone(), from.clone()) {
+            panic!("Sender must be whitelisted for transfers");
+        }
+
+        let from_balance: u32 = env.storage().persistent().get(&DataKey::Balance(from.clone())).unwrap_or(0);
+        let mut total_amount: u32 = 0;
+
+        // Calculate total amount and validate each transfer
+        for i in 0..recipients.len() {
+            let amount = amounts.get(i).unwrap();
+            let recipient = recipients.get(i).unwrap();
+
+            if amount == 0 {
+                panic!("Transfer amount must be positive");
+            }
+
+            // Check whitelist compliance for recipient
+            if !Self::is_whitelisted(env.clone(), recipient.clone()) {
+                panic!("Recipient must be whitelisted for transfers");
+            }
+
+            // Check transfer whitelist
+            if !is_transfer_whitelisted(&env, &recipient) {
+                panic!("Transfer not allowed for recipient");
+            }
+
+            total_amount = checked_add_u32(total_amount, amount);
+        }
+
+        if total_amount > from_balance {
+            panic!("Insufficient shares for batch transfer");
+        }
+
+        // Check vesting restrictions
+        check_vesting_restrictions(&env, &from, total_amount);
+
+        // Check transfer restrictions
+        check_transfer_restrictions(&env, &from, total_amount);
+
+        let price: i128 = env.storage().instance().get(&DataKey::PricePerShare)
+            .expect("Contract not initialized: price");
+        let mut total_fee: i128 = 0;
+
+        // Execute transfers
+        for i in 0..recipients.len() {
+            let amount = amounts.get(i).unwrap();
+            let recipient = recipients.get(i).unwrap();
+
+            let to_balance: u32 = env.storage().persistent().get(&DataKey::Balance(recipient.clone())).unwrap_or(0);
+            env.storage().persistent().set(&DataKey::Balance(recipient.clone()), &checked_add_u32(to_balance, amount));
+            Self::register_holder(&env, recipient.clone());
+
+            // Calculate fee for this transfer
+            let fee = calculate_transfer_fee(&env, amount, price);
+            total_fee = checked_add_i128(total_fee, fee);
+
+            // Record individual transfer history
+            let tx_hash: BytesN<32> = BytesN::from_array(&env, &[0; 32]);
+            record_transfer_history(&env, from.clone(), recipient.clone(), amount, fee, tx_hash);
+
+            EventTransfer { from: from.clone(), to: recipient.clone(), amount }.publish(&env);
+        }
+
+        // Deduct from sender balance
+        env.storage().persistent().set(&DataKey::Balance(from.clone()), &checked_sub_u32(from_balance, total_amount));
+
+        // Collect total fee
+        if total_fee > 0 {
+            if let Some(config) = env.storage().instance().get::<DataKey, TransferFeeConfig>(&DataKey::TransferFeeConfig) {
+                let token_id: Address = env.storage().instance().get(&DataKey::PaymentToken)
+                    .expect("Contract not initialized: payment token");
+                let client = token::TokenClient::new(&env, &token_id);
+                client.transfer(&from, &config.fee_recipient, &total_fee);
+            }
+        }
+
+        reentrancy_guard_exit(&env);
+    }
+
+    /// Set transfer restrictions for an address. Admin only.
+    pub fn set_transfer_restrictions(env: Env, address: Address, restricted_until: u64, max_transfer_amount: u32, requires_approval: bool) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin)
+            .expect("Contract not initialized: admin");
+        admin.require_auth();
+
+        let restriction = TransferRestriction { restricted_until, max_transfer_amount, requires_approval };
+        env.storage().persistent().set(&DataKey::TransferRestrictions(address.clone()), &restriction);
+    }
+
+    /// Get transfer restrictions for an address.
+    pub fn get_transfer_restrictions(env: Env, address: Address) -> Option<TransferRestriction> {
+        env.storage().persistent().get(&DataKey::TransferRestrictions(address))
+    }
+
+    /// Remove transfer restrictions for an address. Admin only.
+    pub fn remove_transfer_restrictions(env: Env, address: Address) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin)
+            .expect("Contract not initialized: admin");
+        admin.require_auth();
+
+        env.storage().persistent().remove(&DataKey::TransferRestrictions(address));
+    }
+
+    /// Request approval for a transfer that requires it.
+    pub fn request_transfer_approval(env: Env, from: Address, to: Address, amount: u32) -> u64 {
+        from.require_auth();
+
+        let approval_id: u64 = env.storage().instance().get(&DataKey::NextTransferApprovalId).unwrap_or(0);
+        let next_id = approval_id + 1;
+        env.storage().instance().set(&DataKey::NextTransferApprovalId, &next_id);
+
+        let approval = TransferApproval {
+            from: from.clone(),
+            to: to.clone(),
+            amount,
+            requested_at: env.ledger().timestamp(),
+            approved: false,
+        };
+
+        env.storage().persistent().set(&DataKey::PendingTransferApproval(approval_id), &approval);
+
+        approval_id
+    }
+
+    /// Grant or deny a transfer approval. Admin only.
+    pub fn grant_transfer_approval(env: Env, approval_id: u64, approved: bool) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin)
+            .expect("Contract not initialized: admin");
+        admin.require_auth();
+
+        let mut approval: TransferApproval = env.storage().persistent()
+            .get(&DataKey::PendingTransferApproval(approval_id))
+            .unwrap_or_else(|| panic!("Approval not found"));
+
+        approval.approved = approved;
+        env.storage().persistent().set(&DataKey::PendingTransferApproval(approval_id), &approval);
+    }
+
+    /// Execute a transfer that has been approved.
+    pub fn execute_approved_transfer(env: Env, approval_id: u64) {
+        let approval: TransferApproval = env.storage().persistent()
+            .get(&DataKey::PendingTransferApproval(approval_id))
+            .unwrap_or_else(|| panic!("Approval not found"));
+
+        if !approval.approved {
+            panic!("Transfer has not been approved");
+        }
+
+        // Execute the transfer
+        Self::transfer_shares(env.clone(), approval.from, approval.to, approval.amount);
+
+        // Remove the approval after execution
+        env.storage().persistent().remove(&DataKey::PendingTransferApproval(approval_id));
+    }
+
+    /// Get a pending transfer approval by ID.
+    pub fn get_transfer_approval(env: Env, approval_id: u64) -> Option<TransferApproval> {
+        env.storage().persistent().get(&DataKey::PendingTransferApproval(approval_id))
+    }
+
+    /// Add an address to the transfer whitelist. Admin only.
+    pub fn add_to_transfer_whitelist(env: Env, addr: Address) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin)
+            .expect("Contract not initialized: admin");
+        admin.require_auth();
+        env.storage().persistent().set(&DataKey::TransferWhitelist(addr.clone()), &true);
+    }
+
+    /// Remove an address from the transfer whitelist. Admin only.
+    pub fn remove_from_transfer_whitelist(env: Env, addr: Address) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin)
+            .expect("Contract not initialized: admin");
+        admin.require_auth();
+        env.storage().persistent().remove(&DataKey::TransferWhitelist(addr.clone()));
+    }
+
+    /// Check if an address is transfer-whitelisted.
+    pub fn is_transfer_whitelisted_public(env: Env, addr: Address) -> bool {
+        is_transfer_whitelisted(&env, &addr)
+    }
+
+    /// Get transfer history entry by index.
+    pub fn get_transfer_history(env: Env, index: u64) -> Option<TransferHistoryEntry> {
+        env.storage().persistent().get(&DataKey::TransferHistory(index))
+    }
+
+    /// Get total number of transfer history entries.
+    pub fn get_transfer_history_count(env: Env) -> u64 {
+        env.storage().instance().get(&DataKey::TransferHistoryIndex).unwrap_or(0)
     }
 
     // ── Buyback ────────────────────────────────────────────────────────────
@@ -5431,6 +4768,7 @@ mod test {
         c.process_auto_buyback(&te.buyer, &10);
     }
 
+<<<<<<< HEAD
     // ── NFT minting tests ───────────────────────────────────────────────
 
     use share_certificate_nft::ShareCertificate;
@@ -5449,10 +4787,17 @@ mod test {
 
     #[test]
     fn test_set_and_get_nft_contract() {
+=======
+    // ── Secure Transfer Function Tests ───────────────────────────────────
+
+    #[test]
+    fn test_set_transfer_fee_config() {
+>>>>>>> f45fdb2 (Implement secure share transfer function with comprehensive features)
         let te = setup();
         let c = client(&te);
         c.init(&te.admin, &te.token_id, &100, &1000);
 
+<<<<<<< HEAD
         let nft_id = setup_nft(&te);
         c.set_nft_contract(&nft_id);
         assert_eq!(c.get_nft_contract(), Some(nft_id));
@@ -5469,11 +4814,41 @@ mod test {
 
     #[test]
     fn test_buy_shares_mints_nfts() {
+=======
+        c.set_transfer_fee_config(&100, &te.admin, &1000);
+        let config = c.get_transfer_fee_config().unwrap();
+        assert_eq!(config.fee_bps, 100);
+        assert_eq!(config.fee_recipient, te.admin);
+        assert_eq!(config.max_fee, 1000);
+    }
+
+    #[test]
+    #[should_panic(expected = "Fee basis points cannot exceed 10000")]
+    fn test_set_transfer_fee_config_too_high() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        c.set_transfer_fee_config(&10001, &te.admin, &1000);
+    }
+
+    #[test]
+    #[should_panic(expected = "Max fee cannot be negative")]
+    fn test_set_transfer_fee_config_negative_max() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        c.set_transfer_fee_config(&100, &te.admin, &-1);
+    }
+
+    #[test]
+    fn test_transfer_with_fee() {
+>>>>>>> f45fdb2 (Implement secure share transfer function with comprehensive features)
         let te = setup();
         let c = client(&te);
         c.init(&te.admin, &te.token_id, &100, &1000);
         mint(&te, &te.buyer, 100_000);
         c.add_to_whitelist(&te.buyer);
+<<<<<<< HEAD
 
         let nft_id = setup_nft(&te);
         c.set_nft_contract(&nft_id);
@@ -5489,12 +4864,320 @@ mod test {
 
     #[test]
     fn test_buy_shares_without_nft_contract_still_works() {
+=======
+        c.buy_shares(&te.buyer, &50);
+
+        let fee_recipient = Address::generate(&te.env);
+        c.set_transfer_fee_config(&100, &fee_recipient, &1000); // 1% fee
+
+        let recipient = Address::generate(&te.env);
+        c.add_to_whitelist(&recipient);
+        mint(&te, &recipient, 10_000);
+
+        c.transfer_shares(&te.buyer, &recipient, &10);
+
+        // Fee should be 1% of 10 * 100 = 1000 tokens
+        let token_client = token::TokenClient::new(&te.env, &te.token_id);
+        // buyer: 100_000 - 50*100 = 95_000, then - 1000 fee = 94_000
+        // recipient: 10_000 + 0 (no fee paid by recipient)
+        // fee_recipient: 0 + 1000 = 1000
+        assert_eq!(token_client.balance(&te.buyer), 94_000);
+        assert_eq!(token_client.balance(&fee_recipient), 1000);
+    }
+
+    #[test]
+    fn test_batch_transfer() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+        c.buy_shares(&te.buyer, &100);
+
+        let recipient1 = Address::generate(&te.env);
+        let recipient2 = Address::generate(&te.env);
+        c.add_to_whitelist(&recipient1);
+        c.add_to_whitelist(&recipient2);
+
+        let mut recipients: Vec<Address> = Vec::new(&te.env);
+        recipients.push_back(recipient1.clone());
+        recipients.push_back(recipient2.clone());
+
+        let mut amounts: Vec<u32> = Vec::new(&te.env);
+        amounts.push_back(30);
+        amounts.push_back(20);
+
+        c.batch_transfer(&te.buyer, recipients, amounts);
+
+        assert_eq!(c.get_shares(&te.buyer), 50);
+        assert_eq!(c.get_shares(&recipient1), 30);
+        assert_eq!(c.get_shares(&recipient2), 20);
+    }
+
+    #[test]
+    #[should_panic(expected = "Recipients list cannot be empty")]
+    fn test_batch_transfer_empty_recipients() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+        c.buy_shares(&te.buyer, &50);
+
+        let recipients: Vec<Address> = Vec::new(&te.env);
+        let amounts: Vec<u32> = Vec::new(&te.env);
+        c.batch_transfer(&te.buyer, recipients, amounts);
+    }
+
+    #[test]
+    #[should_panic(expected = "Recipients and amounts must have the same length")]
+    fn test_batch_transfer_mismatched_lengths() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+        c.buy_shares(&te.buyer, &50);
+
+        let mut recipients: Vec<Address> = Vec::new(&te.env);
+        recipients.push_back(Address::generate(&te.env));
+
+        let mut amounts: Vec<u32> = Vec::new(&te.env);
+        amounts.push_back(10);
+        amounts.push_back(20);
+
+        c.batch_transfer(&te.buyer, recipients, amounts);
+    }
+
+    #[test]
+    fn test_set_transfer_restrictions() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+
+        let restricted_addr = Address::generate(&te.env);
+        c.set_transfer_restrictions(&restricted_addr, &1000, &50, &true);
+
+        let restriction = c.get_transfer_restrictions(&restricted_addr).unwrap();
+        assert_eq!(restriction.restricted_until, 1000);
+        assert_eq!(restriction.max_transfer_amount, 50);
+        assert_eq!(restriction.requires_approval, true);
+    }
+
+    #[test]
+    fn test_remove_transfer_restrictions() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+
+        let restricted_addr = Address::generate(&te.env);
+        c.set_transfer_restrictions(&restricted_addr, &1000, &50, &true);
+        assert!(c.get_transfer_restrictions(&restricted_addr).is_some());
+
+        c.remove_transfer_restrictions(&restricted_addr);
+        assert!(c.get_transfer_restrictions(&restricted_addr).is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "Transfer restricted until timestamp")]
+    fn test_transfer_restriction_time_based() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+        c.buy_shares(&te.buyer, &50);
+
+        let future_time = te.env.ledger().timestamp() + 10000;
+        c.set_transfer_restrictions(&te.buyer, &future_time, &100, &false);
+
+        let recipient = Address::generate(&te.env);
+        c.add_to_whitelist(&recipient);
+        c.transfer_shares(&te.buyer, &recipient, &10);
+    }
+
+    #[test]
+    #[should_panic(expected = "Transfer amount exceeds maximum allowed")]
+    fn test_transfer_restriction_max_amount() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+        c.buy_shares(&te.buyer, &50);
+
+        let past_time = te.env.ledger().timestamp() - 1000;
+        c.set_transfer_restrictions(&te.buyer, &past_time, &5, &false);
+
+        let recipient = Address::generate(&te.env);
+        c.add_to_whitelist(&recipient);
+        c.transfer_shares(&te.buyer, &recipient, &10);
+    }
+
+    #[test]
+    #[should_panic(expected = "Transfer requires prior approval")]
+    fn test_transfer_requires_approval() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+        c.buy_shares(&te.buyer, &50);
+
+        let past_time = te.env.ledger().timestamp() - 1000;
+        c.set_transfer_restrictions(&te.buyer, &past_time, &100, &true);
+
+        let recipient = Address::generate(&te.env);
+        c.add_to_whitelist(&recipient);
+        c.transfer_shares(&te.buyer, &recipient, &10);
+    }
+
+    #[test]
+    fn test_request_transfer_approval() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+        c.buy_shares(&te.buyer, &50);
+
+        let recipient = Address::generate(&te.env);
+        let approval_id = c.request_transfer_approval(&te.buyer, &recipient, &10);
+
+        assert_eq!(approval_id, 0);
+        let approval = c.get_transfer_approval(&approval_id).unwrap();
+        assert_eq!(approval.from, te.buyer);
+        assert_eq!(approval.to, recipient);
+        assert_eq!(approval.amount, 10);
+        assert_eq!(approval.approved, false);
+    }
+
+    #[test]
+    fn test_grant_and_execute_transfer_approval() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+        c.buy_shares(&te.buyer, &50);
+
+        let recipient = Address::generate(&te.env);
+        c.add_to_whitelist(&recipient);
+
+        let approval_id = c.request_transfer_approval(&te.buyer, &recipient, &10);
+        c.grant_transfer_approval(&approval_id, &true);
+
+        c.execute_approved_transfer(&approval_id);
+
+        assert_eq!(c.get_shares(&te.buyer), 40);
+        assert_eq!(c.get_shares(&recipient), 10);
+        assert!(c.get_transfer_approval(&approval_id).is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "Transfer has not been approved")]
+    fn test_execute_unapproved_transfer() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+        c.buy_shares(&te.buyer, &50);
+
+        let recipient = Address::generate(&te.env);
+        c.add_to_whitelist(&recipient);
+
+        let approval_id = c.request_transfer_approval(&te.buyer, &recipient, &10);
+        c.execute_approved_transfer(&approval_id);
+    }
+
+    #[test]
+    fn test_transfer_whitelist() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+
+        let addr = Address::generate(&te.env);
+        assert!(c.is_transfer_whitelisted_public(&addr)); // Default is true
+
+        c.remove_from_transfer_whitelist(&addr);
+        assert!(!c.is_transfer_whitelisted_public(&addr));
+
+        c.add_to_transfer_whitelist(&addr);
+        assert!(c.is_transfer_whitelisted_public(&addr));
+    }
+
+    #[test]
+    #[should_panic(expected = "Transfer not allowed for one or both parties")]
+    fn test_transfer_blocked_by_whitelist() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+        c.buy_shares(&te.buyer, &50);
+
+        let recipient = Address::generate(&te.env);
+        c.add_to_whitelist(&recipient);
+        c.remove_from_transfer_whitelist(&recipient);
+
+        c.transfer_shares(&te.buyer, &recipient, &10);
+    }
+
+    #[test]
+    fn test_transfer_history_tracking() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+        c.buy_shares(&te.buyer, &50);
+
+        let recipient = Address::generate(&te.env);
+        c.add_to_whitelist(&recipient);
+
+        c.transfer_shares(&te.buyer, &recipient, &10);
+
+        assert_eq!(c.get_transfer_history_count(), 1);
+        let entry = c.get_transfer_history(&0).unwrap();
+        assert_eq!(entry.from, te.buyer);
+        assert_eq!(entry.to, recipient);
+        assert_eq!(entry.amount, 10);
+    }
+
+    #[test]
+    #[should_panic(expected = "Reentrancy detected")]
+    fn test_reentrancy_protection() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+        c.buy_shares(&te.buyer, &50);
+
+        let recipient = Address::generate(&te.env);
+        c.add_to_whitelist(&recipient);
+
+        // Manually set reentrancy guard to simulate reentrancy
+        te.env.as_contract(&te.contract_id, || {
+            te.env.storage().instance().set(&DataKey::ReentrancyGuard, &true);
+        });
+
+        // This should panic due to reentrancy guard
+        c.transfer_shares(&te.buyer, &recipient, &10);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot transfer vested shares")]
+    fn test_transfer_vested_shares_blocked() {
+>>>>>>> f45fdb2 (Implement secure share transfer function with comprehensive features)
         let te = setup();
         let c = client(&te);
         c.init(&te.admin, &te.token_id, &100, &1000);
         mint(&te, &te.buyer, 100_000);
         c.add_to_whitelist(&te.buyer);
 
+<<<<<<< HEAD
         // No NFT contract configured — buy_shares should succeed normally
         c.buy_shares(&te.buyer, &5, &te.token_id);
         assert_eq!(c.get_shares(&te.buyer), 5);
@@ -5502,12 +5185,26 @@ mod test {
 
     #[test]
     fn test_nft_owner_is_buyer() {
+=======
+        // Buy vested shares
+        c.buy_vested_shares(&te.buyer, &50, &3600);
+
+        // Try to transfer more than liquid balance (which is 0)
+        let recipient = Address::generate(&te.env);
+        c.add_to_whitelist(&recipient);
+        c.transfer_shares(&te.buyer, &recipient, &10);
+    }
+
+    #[test]
+    fn test_transfer_liquid_shares_after_vesting() {
+>>>>>>> f45fdb2 (Implement secure share transfer function with comprehensive features)
         let te = setup();
         let c = client(&te);
         c.init(&te.admin, &te.token_id, &100, &1000);
         mint(&te, &te.buyer, 100_000);
         c.add_to_whitelist(&te.buyer);
 
+<<<<<<< HEAD
         let nft_id = setup_nft(&te);
         c.set_nft_contract(&nft_id);
 
@@ -5517,6 +5214,72 @@ mod test {
         te.env.as_contract(&nft_id, || {
             assert_eq!(Base::owner_of(&te.env, 0), te.buyer);
         });
+=======
+        // Buy both liquid and vested shares
+        c.buy_shares(&te.buyer, &30);
+        c.buy_vested_shares(&te.buyer, &20, &3600);
+
+        // Should be able to transfer liquid shares
+        let recipient = Address::generate(&te.env);
+        c.add_to_whitelist(&recipient);
+        c.transfer_shares(&te.buyer, &recipient, &10);
+
+        assert_eq!(c.get_shares(&te.buyer), 20); // 20 liquid remaining
+        assert_eq!(c.get_shares(&recipient), 10);
+    }
+
+    #[test]
+    fn test_transfer_from_with_restrictions() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+        c.buy_shares(&te.buyer, &50);
+
+        let spender = Address::generate(&te.env);
+        let recipient = Address::generate(&te.env);
+        c.add_to_whitelist(&recipient);
+
+        c.approve(&te.buyer, &spender, &30);
+        c.transfer_shares_from(&spender, &te.buyer, &recipient, &20);
+
+        assert_eq!(c.get_shares(&te.buyer), 30);
+        assert_eq!(c.get_shares(&recipient), 20);
+    }
+
+    #[test]
+    fn test_batch_transfer_with_fee() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+        c.buy_shares(&te.buyer, &100);
+
+        let fee_recipient = Address::generate(&te.env);
+        c.set_transfer_fee_config(&100, &fee_recipient, &1000); // 1% fee
+
+        let recipient1 = Address::generate(&te.env);
+        let recipient2 = Address::generate(&te.env);
+        c.add_to_whitelist(&recipient1);
+        c.add_to_whitelist(&recipient2);
+
+        let mut recipients: Vec<Address> = Vec::new(&te.env);
+        recipients.push_back(recipient1.clone());
+        recipients.push_back(recipient2.clone());
+
+        let mut amounts: Vec<u32> = Vec::new(&te.env);
+        amounts.push_back(30);
+        amounts.push_back(20);
+
+        c.batch_transfer(&te.buyer, recipients, amounts);
+
+        // Total fee: (30 + 20) * 100 * 0.01 = 50 tokens
+        let token_client = token::TokenClient::new(&te.env, &te.token_id);
+        assert_eq!(token_client.balance(&te.buyer), 100_000 - 100*100 - 50); // 100*100 cost + 50 fee
+        assert_eq!(token_client.balance(&fee_recipient), 50);
+>>>>>>> f45fdb2 (Implement secure share transfer function with comprehensive features)
     }
 
     // ── Re-entrancy guard tests ───────────────────────────────────────────────
@@ -5815,6 +5578,7 @@ mod test {
         c.claim_vested_shares(&te.buyer);
     }
 }
+
 // --- TIMELOCK MODULE ---
 // Appended as a completely isolated module to avoid breaking existing enums.
 
