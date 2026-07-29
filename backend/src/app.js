@@ -61,6 +61,7 @@ import { createSecurityHeadersMiddleware } from './middleware/securityHeaders.js
 import { v1 } from './routes/rwa.js';
 import { swaggerSpec } from '../docs.js';
 import { initDatabase, getDatabase } from './services/database.js';
+import { getSqlInjectionGuard, sqlInjectionGuardMiddleware, createSqlInjectionGuardRoutes } from './services/sqlInjectionGuard.js';
 import { createApiKeyService } from './services/apiKeyService.js';
 import { createApiKeysRouter } from './routes/apiKeys.js';
 import { createTransactionService } from './services/transactionService.js';
@@ -159,6 +160,16 @@ export async function initializeApp() {
     // Initialize database
     const db = await initDatabase(NODE_ENV);
     logger.info('Database initialized');
+
+    // Initialize SQL injection guard (Issue #356)
+    const sqlGuard = getSqlInjectionGuard();
+    app.use(sqlInjectionGuardMiddleware(db, sqlGuard));
+
+    // Mount SQL Injection Guard admin routes (uses initialized adminAuth)
+    const sqlInjectionGuardRoutes = createSqlInjectionGuardRoutes(sqlGuard, adminAuth);
+    app.use('/api/v1/sql-injection-guard', sqlInjectionGuardRoutes);
+    app.use('/api/sql-injection-guard', sqlInjectionGuardRoutes);
+    logger.info('SQL injection guard initialized');
 
     // Create API key service
     apiKeyService = createApiKeyService(db, logger);
@@ -488,6 +499,9 @@ const apiMonitoringRoutes = createApiMonitoringRoutes();
 app.use('/api/v1/api-monitor', apiMonitoringRoutes);
 app.use('/api/api-monitor', apiMonitoringRoutes);
 
+// SQL Injection Guard routes are mounted inside initializeApp() below
+// so they use the fully initialized adminAuth middleware
+
 // Mount IP Access Control routes (admin only)
 app.use('/api/v1/ip-access', (req, res, next) => {
   if (!ipAccessRoutes) {
@@ -557,10 +571,38 @@ if (SENTRY_DSN) {
   app.use(Sentry.Handlers.errorHandler());
 }
 
-// Generic error handler
+// Generic error handler - Issue #356: prevent SQL details leakage
 app.use((err, req, res, _next) => {
   req.log?.error({ err }, 'Unhandled error');
-  res.status(500).json({ error: 'Internal server error', requestId: req.requestId });
+
+  // Prevent SQL details from leaking to clients
+  if (err.code === 'SQL_INJECTION_BLOCKED') {
+    return res.status(403).json({
+      error: 'Invalid request',
+      requestId: req.requestId,
+      code: 'SECURITY_BLOCK',
+    });
+  }
+
+  // Mask database errors to prevent schema/information disclosure
+  if (err.code && (err.code.startsWith('SQLITE_') || err.code.startsWith('42') || err.code.startsWith('28'))) {
+    return res.status(500).json({
+      error: 'Internal server error',
+      requestId: req.requestId,
+      code: 'DATABASE_ERROR',
+    });
+  }
+
+  // Generic error - don't expose error details in production
+  const message = NODE_ENV === 'production'
+    ? 'Internal server error'
+    : err.message || 'Internal server error';
+
+  res.status(err.status || 500).json({
+    error: message,
+    requestId: req.requestId,
+    ...(NODE_ENV !== 'production' && { code: err.code }),
+  });
 });
 
 /**
