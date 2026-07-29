@@ -17,7 +17,13 @@ const options = {
     ],
     components: {
       securitySchemes: {
-        ApiKeyAuth: {
+        GraphQLTier: {
+    type: 'apiKey',
+    in: 'header',
+    name: 'x-user-tier',
+    description: 'User tier for GraphQL complexity limits: basic, standard, premium, admin',
+  },
+  ApiKeyAuth: {
           type: 'apiKey',
           in: 'header',
           name: 'x-api-key',

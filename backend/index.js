@@ -10,7 +10,7 @@ import { Router } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import pino from 'pino';
+import { logger } from './logger.js';
 import pinoHttp from 'pino-http';
 import * as Sentry from '@sentry/node';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
@@ -19,6 +19,7 @@ import { fileURLToPath } from 'url';
 import { setTimeout } from 'timers/promises';
 import swaggerUi from 'swagger-ui-express';
 import { swaggerSpec } from './docs.js';
+import yoga from './graphql/index.js';
 import { cacheGet, cacheSet, cacheDel } from './cache.js';
 import multer from 'multer';
 import { uploadToIPFS, getIPFSFileUrl, unpinFromIPFS } from './ipfs.js';
@@ -54,11 +55,7 @@ const CORS_ORIGINS = process.env.CORS_ORIGINS
   : ['http://localhost:5173', 'http://localhost:4173'];
 
 // ── Logger ────────────────────────────────────────────────────────────────────
-const isDev = process.env.NODE_ENV === 'development';
-export const logger = pino({
-  level: process.env.LOG_LEVEL || (process.env.NODE_ENV === 'test' ? 'silent' : 'info'),
-  ...(isDev && { transport: { target: 'pino-pretty', options: { colorize: true, ignore: 'pid,hostname' } } }),
-});
+
 
 // ── Sentry ────────────────────────────────────────────────────────────────────
 if (process.env.SENTRY_DSN && process.env.NODE_ENV !== 'test') {
@@ -437,6 +434,9 @@ app.get('/metrics', async (_req, res) => {
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
   customSiteTitle: 'RWA Marketplace API Docs',
 }));
+
+// ── GraphQL Endpoint ───────────────────────────────────────────────────
+app.use('/api/graphql', yoga);
 
 app.get('/api-docs.json', (_req, res) => {
   res.json(swaggerSpec);
