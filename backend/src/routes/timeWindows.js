@@ -35,6 +35,35 @@ export function createTimeWindowRoutes(timeWindowService, logger, adminAuth) {
   const router = Router();
 
   // ── GET /:contractId — List time windows ──────────────────────────────────
+  /**
+   * @openapi
+   * /time-windows/{contractId}:
+   *   get:
+   *     tags: [Time Windows]
+   *     summary: List time windows for an asset
+   *     description: Returns all time-locked purchase windows associated with a given asset contract ID.
+   *     parameters:
+   *       - in: path
+   *         name: contractId
+   *         required: true
+   *         schema:
+   *           type: string
+   *           minLength: 50
+   *         description: Asset contract ID
+   *     responses:
+   *       200:
+   *         description: List of time windows
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/TimeWindowListResponse'
+   *       400:
+   *         description: Invalid contract ID
+   *       404:
+   *         description: Asset not found
+   *       500:
+   *         description: Internal server error
+   */
   router.get('/:contractId', (req, res) => {
     try {
       const { contractId } = req.params;
@@ -60,6 +89,41 @@ export function createTimeWindowRoutes(timeWindowService, logger, adminAuth) {
   });
 
   // ── GET /:contractId/:windowId — Get single time window ───────────────────
+  /**
+   * @openapi
+   * /time-windows/{contractId}/{windowId}:
+   *   get:
+   *     tags: [Time Windows]
+   *     summary: Get single time window
+   *     description: Returns metadata for a specific time-locked purchase window.
+   *     parameters:
+   *       - in: path
+   *         name: contractId
+   *         required: true
+   *         schema:
+   *           type: string
+   *           minLength: 50
+   *         description: Asset contract ID
+   *       - in: path
+   *         name: windowId
+   *         required: true
+   *         schema:
+   *           type: string
+   *         description: Time window identifier
+   *     responses:
+   *       200:
+   *         description: Time window metadata
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/TimeWindow'
+   *       400:
+   *         description: Invalid contract ID
+   *       404:
+   *         description: Asset or time window not found
+   *       500:
+   *         description: Internal server error
+   */
   router.get('/:contractId/:windowId', (req, res) => {
     try {
       const { contractId, windowId } = req.params;
@@ -82,6 +146,48 @@ export function createTimeWindowRoutes(timeWindowService, logger, adminAuth) {
   });
 
   // ── GET /:contractId/:windowId/events — Get window events (cursor-based) ──
+  /**
+   * @openapi
+   * /time-windows/{contractId}/{windowId}/events:
+   *   get:
+   *     tags: [Time Window Events]
+   *     summary: Get events for a time window (cursor-based)
+   *     description: Returns paginated events for a specific time-locked purchase window. Supports cursor-based pagination using event ID + timestamp cursors. Events are ordered by created_at descending.
+   *     parameters:
+   *       - in: path
+   *         name: contractId
+   *         required: true
+   *         schema: { type: string }
+   *         description: Asset contract ID
+   *       - in: path
+   *         name: windowId
+   *         required: true
+   *         schema: { type: string }
+   *         description: Time window identifier
+   *       - in: query
+   *         name: limit
+   *         schema: { type: integer, default: 50 }
+   *         description: Maximum events per page
+   *       - in: query
+   *         name: after
+   *         schema: { type: string }
+   *         description: Cursor for forward pagination
+   *       - in: query
+   *         name: before
+   *         schema: { type: string }
+   *         description: Cursor for backward pagination
+   *     responses:
+   *       200:
+   *         description: Paginated events
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/PaginatedTimeWindowEvents'
+   *       400:
+   *         description: Invalid contract ID
+   *       500:
+   *         description: Internal server error
+   */
   router.get('/:contractId/:windowId/events', async (req, res) => {
     try {
       const { contractId, windowId } = req.params;
@@ -104,6 +210,34 @@ export function createTimeWindowRoutes(timeWindowService, logger, adminAuth) {
   });
 
   // ── GET /:contractId/:windowId/analytics — Get window analytics ───────────
+  /**
+   * @openapi
+   * /time-windows/{contractId}/{windowId}/analytics:
+   *   get:
+   *     tags: [Time Window Events]
+   *     summary: Get analytics for a time window
+   *     description: Returns purchase analytics (total purchases, unique buyers, shares sold, volume, averages) for a specific time window.
+   *     parameters:
+   *       - in: path
+   *         name: contractId
+   *         required: true
+   *         schema: { type: string }
+   *       - in: path
+   *         name: windowId
+   *         required: true
+   *         schema: { type: string }
+   *     responses:
+   *       200:
+   *         description: Window analytics
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/TimeWindowAnalyticsResponse'
+   *       400:
+   *         description: Invalid contract ID
+   *       500:
+   *         description: Internal server error
+   */
   router.get('/:contractId/:windowId/analytics', async (req, res) => {
     try {
       const { contractId, windowId } = req.params;
@@ -120,6 +254,30 @@ export function createTimeWindowRoutes(timeWindowService, logger, adminAuth) {
   });
 
   // ── GET /:contractId/analytics/aggregate — Aggregate analytics ────────────
+  /**
+   * @openapi
+   * /time-windows/{contractId}/analytics/aggregate:
+   *   get:
+   *     tags: [Time Window Events]
+   *     summary: Get aggregate analytics across all windows
+   *     description: Returns aggregated analytics across all time windows for an asset, including total windows, active vs cancelled, total volume, utilization rate.
+   *     parameters:
+   *       - in: path
+   *         name: contractId
+   *         required: true
+   *         schema: { type: string }
+   *     responses:
+   *       200:
+   *         description: Aggregate analytics
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/AggregateAnalyticsResponse'
+   *       400:
+   *         description: Invalid contract ID
+   *       500:
+   *         description: Internal server error
+   */
   router.get('/:contractId/analytics/aggregate', async (req, res) => {
     try {
       const { contractId } = req.params;
@@ -136,6 +294,34 @@ export function createTimeWindowRoutes(timeWindowService, logger, adminAuth) {
   });
 
   // ── GET /:contractId/analytics/trends — Usage trends ──────────────────────
+  /**
+   * @openapi
+   * /time-windows/{contractId}/analytics/trends:
+   *   get:
+   *     tags: [Time Window Events]
+   *     summary: Get usage trends over time
+   *     description: Returns daily aggregated event data (purchases, shares sold, volume) for the specified lookback period.
+   *     parameters:
+   *       - in: path
+   *         name: contractId
+   *         required: true
+   *         schema: { type: string }
+   *       - in: query
+   *         name: days
+   *         schema: { type: integer, default: 30, minimum: 1 }
+   *         description: Number of days to look back
+   *     responses:
+   *       200:
+   *         description: Daily trend data
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/WindowTrendsResponse'
+   *       400:
+   *         description: Invalid contract ID
+   *       500:
+   *         description: Internal server error
+   */
   router.get('/:contractId/analytics/trends', async (req, res) => {
     try {
       const { contractId } = req.params;
@@ -153,6 +339,54 @@ export function createTimeWindowRoutes(timeWindowService, logger, adminAuth) {
   });
 
   // ── GET /:contractId/events — All events for asset's time windows (cursor) ─
+  /**
+   * @openapi
+   * /time-windows/{contractId}/events:
+   *   get:
+   *     tags: [Time Window Events]
+   *     summary: Get all events for an asset's time windows (cursor-based)
+   *     description: Returns cursor-paginated events across all time windows for an asset. Supports filtering by eventType, date range (from/to), and cursor pagination.
+   *     parameters:
+   *       - in: path
+   *         name: contractId
+   *         required: true
+   *         schema: { type: string }
+   *       - in: query
+   *         name: eventType
+   *         schema: { type: string }
+   *         description: Filter by event type
+   *       - in: query
+   *         name: from
+   *         schema: { type: string, format: date-time }
+   *         description: Start date (ISO 8601)
+   *       - in: query
+   *         name: to
+   *         schema: { type: string, format: date-time }
+   *         description: End date (ISO 8601)
+   *       - in: query
+   *         name: limit
+   *         schema: { type: integer, default: 100 }
+   *         description: Maximum events per page
+   *       - in: query
+   *         name: after
+   *         schema: { type: string }
+   *         description: Cursor for forward pagination
+   *       - in: query
+   *         name: before
+   *         schema: { type: string }
+   *         description: Cursor for backward pagination
+   *     responses:
+   *       200:
+   *         description: Paginated events
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/PaginatedTimeWindowEvents'
+   *       400:
+   *         description: Invalid contract ID
+   *       500:
+   *         description: Internal server error
+   */
   router.get('/:contractId/events', async (req, res) => {
     try {
       const { contractId } = req.params;
@@ -178,6 +412,42 @@ export function createTimeWindowRoutes(timeWindowService, logger, adminAuth) {
   });
 
   // ── POST /:contractId — Create time window metadata (admin) ──────────────
+  /**
+   * @openapi
+   * /time-windows/{contractId}:
+   *   post:
+   *     tags: [Time Windows]
+   *     summary: Create time window metadata (admin)
+   *     description: Creates a new time-locked purchase window for an asset. Requires admin authentication. Required: windowId, title, description. Logs a window.metadata.created event on success.
+   *     security:
+   *       - ApiKeyAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: contractId
+   *         required: true
+   *         schema: { type: string }
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             $ref: '#/components/schemas/TimeWindowInput'
+   *     responses:
+   *       201:
+   *         description: Time window created
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/TimeWindow'
+   *       400:
+   *         description: Invalid contract ID or missing required fields
+   *       401:
+   *         description: Invalid or missing API key
+   *       404:
+   *         description: Asset not found
+   *       500:
+   *         description: Internal server error
+   */
   router.post('/:contractId', adminAuth, (req, res) => {
     try {
       const { contractId } = req.params;
@@ -231,6 +501,51 @@ export function createTimeWindowRoutes(timeWindowService, logger, adminAuth) {
   });
 
   // ── PUT /:contractId/:windowId — Update time window metadata (admin) ──────
+  /**
+   * @openapi
+   * /time-windows/{contractId}/{windowId}:
+   *   put:
+   *     tags: [Time Windows]
+   *     summary: Update time window metadata (admin)
+   *     description: Updates an existing time window's metadata (title, description, imageUrl, termsUrl). Partial updates supported. Logs a window.metadata.updated event on success.
+   *     security:
+   *       - ApiKeyAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: contractId
+   *         required: true
+   *         schema: { type: string }
+   *       - in: path
+   *         name: windowId
+   *         required: true
+   *         schema: { type: string }
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             properties:
+   *               title: { type: string }
+   *               description: { type: string }
+   *               imageUrl: { type: string }
+   *               termsUrl: { type: string }
+   *     responses:
+   *       200:
+   *         description: Time window updated
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/TimeWindow'
+   *       400:
+   *         description: Invalid contract ID
+   *       401:
+   *         description: Invalid or missing API key
+   *       404:
+   *         description: Asset or time window not found
+   *       500:
+   *         description: Internal server error
+   */
   router.put('/:contractId/:windowId', adminAuth, (req, res) => {
     try {
       const { contractId, windowId } = req.params;
@@ -277,6 +592,40 @@ export function createTimeWindowRoutes(timeWindowService, logger, adminAuth) {
   });
 
   // ── DELETE /:contractId/:windowId — Delete time window metadata (admin) ───
+  /**
+   * @openapi
+   * /time-windows/{contractId}/{windowId}:
+   *   delete:
+   *     tags: [Time Windows]
+   *     summary: Delete time window metadata (admin)
+   *     description: Deletes a time window and its metadata. Logs a window.metadata.deleted event.
+   *     security:
+   *       - ApiKeyAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: contractId
+   *         required: true
+   *         schema: { type: string }
+   *       - in: path
+   *         name: windowId
+   *         required: true
+   *         schema: { type: string }
+   *     responses:
+   *       200:
+   *         description: Time window deleted
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/DeleteResponse'
+   *       400:
+   *         description: Invalid contract ID
+   *       401:
+   *         description: Invalid or missing API key
+   *       404:
+   *         description: Time window not found
+   *       500:
+   *         description: Internal server error
+   */
   router.delete('/:contractId/:windowId', adminAuth, (req, res) => {
     try {
       const { contractId, windowId } = req.params;
@@ -310,6 +659,44 @@ export function createTimeWindowRoutes(timeWindowService, logger, adminAuth) {
   });
 
   // ── POST /:contractId/:windowId/log — Manually log event (admin) ──────────
+  /**
+   * @openapi
+   * /time-windows/{contractId}/{windowId}/log:
+   *   post:
+   *     tags: [Time Window Events]
+   *     summary: Manually log a time window event (admin)
+   *     description: Manually records a time window event (e.g., for backfilling or testing). Requires admin authentication. Only eventType is required; adminAddress, buyerAddress, and details are optional.
+   *     security:
+   *       - ApiKeyAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: contractId
+   *         required: true
+   *         schema: { type: string }
+   *       - in: path
+   *         name: windowId
+   *         required: true
+   *         schema: { type: string }
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             $ref: '#/components/schemas/TimeWindowEventInput'
+   *     responses:
+   *       201:
+   *         description: Event logged successfully
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/PaginatedTimeWindowEvents'
+   *       400:
+   *         description: Invalid contract ID or missing eventType
+   *       401:
+   *         description: Invalid or missing API key
+   *       500:
+   *         description: Internal server error
+   */
   router.post('/:contractId/:windowId/log', adminAuth, async (req, res) => {
     try {
       const { contractId, windowId } = req.params;
