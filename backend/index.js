@@ -2,7 +2,6 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
 import pino from 'pino';
 import pinoHttp from 'pino-http';
 import * as Sentry from '@sentry/node';
@@ -10,6 +9,13 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { cacheGet, cacheSet, cacheDel } from './cache.js';
+import { RateLimiterService } from './src/services/rateLimiterService.js';
+import { AnomalyDetector } from './src/services/anomalyDetector.js';
+import { GeoLimiter } from './src/services/geoLimiter.js';
+import { RateLimitAnalytics } from './src/services/rateLimitAnalytics.js';
+import { BillingService } from './src/services/billingService.js';
+import { createRateLimiter } from './src/middleware/rateLimiter.js';
+import { createRateLimitAdminRoutes } from './src/routes/rateLimitAdmin.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3001;
@@ -108,22 +114,56 @@ app.use(pinoHttp({
   autoLogging: { ignore: req => req.url === '/health' },
 }));
 
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 200,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many requests, please try again later' },
-});
-app.use('/api/', apiLimiter);
+// ── Rate Limiting Services ─────────────────────────────────────────────────────
+const rateLimitAnalytics = new RateLimitAnalytics({ logger });
+const anomalyDetector = new AnomalyDetector({ logger });
+const geoLimiter = new GeoLimiter({ logger });
+const billingService = new BillingService({ logger });
 
-const writeLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many write requests, please try again later' },
+const rateLimiterService = new RateLimiterService({
+  logger,
+  analytics: rateLimitAnalytics,
+  anomalyDetector,
+  geoLimiter,
+  billingService,
 });
+
+// Configure default admin API key with enterprise tier
+const adminApiKey = process.env.ADMIN_API_KEY || 'dev-key-change-in-production';
+rateLimiterService.configureApiKey(adminApiKey, 'enterprise', {
+  email: process.env.ADMIN_EMAIL,
+});
+
+const rateLimiter = createRateLimiter(rateLimiterService, {
+  onBlocked: (req, res, result) => {
+    const body = { error: 'Rate limit exceeded' };
+    if (result.reason) body.reason = result.reason;
+    if (result.upgradePrompt) body.upgrade = result.upgradePrompt;
+    req.log?.warn({ reason: result.reason, apiKey: req.headers['x-api-key']?.slice(0, 8) }, 'Request rate limited');
+    return res.status(result.status || 429).json(body);
+  },
+});
+
+// Apply rate limiter to all API routes (skip admin routes which have their own auth)
+app.use('/api/', (req, res, next) => {
+  if (req.path.startsWith('/admin/rate-limits')) return next();
+  rateLimiter(req, res, next);
+});
+
+// Write limiter for admin write operations (POST/DELETE)
+const writeLimiter = async (req, res, next) => {
+  const apiKey = req.headers['x-api-key'] || req.query.api_key;
+  if (!apiKey) return next();
+  const result = await rateLimiterService.checkRateLimit(apiKey, {
+    ip: req.ip,
+    path: req.path,
+    method: req.method,
+  });
+  if (!result.allowed) {
+    return res.status(429).json({ error: 'Too many write requests', reason: result.reason });
+  }
+  next();
+};
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
@@ -131,6 +171,15 @@ const writeLimiter = rateLimit({
 app.get('/api/admin/verify', adminAuth, (_req, res) => {
   res.json({ ok: true });
 });
+
+// Rate limit admin routes (mounted before the rate limiter that skips them)
+const rateLimitAdminRoutes = createRateLimitAdminRoutes(rateLimiterService, adminAuth, {
+  analytics: rateLimitAnalytics,
+  anomalyDetector,
+  geoLimiter,
+  billingService,
+});
+app.use('/api/admin/rate-limits', rateLimitAdminRoutes);
 
 app.get('/health', async (_req, res) => {
   const deps = {
@@ -275,11 +324,17 @@ app.use((err, req, res, _next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-export { app };
+export { app, rateLimiterService, rateLimitAnalytics, anomalyDetector, geoLimiter, billingService };
 
 if (process.env.NODE_ENV !== 'test') {
   import('./cache.js').then(({ initClient }) => initClient());
   app.listen(PORT, () => {
-    logger.info({ port: PORT }, 'RWA Off-chain Metadata Backend started');
+    logger.info({
+      port: PORT,
+      rateLimiterTiers: Object.keys(rateLimiterService.getAvailableTiers()).length,
+      anomalyDetection: anomalyDetector._enabled,
+      geoLimiting: geoLimiter.enabled,
+      billing: billingService.enabled,
+    }, 'RWA Off-chain Metadata Backend started');
   });
 }

@@ -5,11 +5,14 @@ process.env.DATA_FILE = 'test-data.json';
 
 import request from 'supertest';
 import { unlinkSync, existsSync } from 'fs';
-import { app } from '../index.js';
+import { app, rateLimiterService } from '../index.js';
 import { setClient } from '../cache.js';
 
 // Ensure Redis is disabled (null = graceful fallback) for these tests
-beforeAll(() => setClient(null));
+beforeAll(() => {
+  setClient(null);
+  rateLimiterService.configureApiKey('test-key-for-jest', 'enterprise');
+});
 afterAll(() => setClient(null));
 
 const API_KEY = 'test-key-for-jest';
@@ -198,15 +201,21 @@ describe('DELETE /api/rwa/:contractId', () => {
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 describe('Rate limiting', () => {
-  test('write limiter blocks after 20 requests', async () => {
-    const ids = Array.from({ length: 21 }, (_, i) =>
+  const LIMITED_KEY = 'test-rate-limited-key';
+
+  beforeAll(() => {
+    rateLimiterService.configureApiKey(LIMITED_KEY, 'free');
+  });
+
+  test('write limiter blocks after rate limit exceeded', async () => {
+    const ids = Array.from({ length: 101 }, (_, i) =>
       'C' + String(i).padStart(55, '0')
     );
     const statuses = [];
     for (const id of ids) {
       const res = await request(app)
         .post('/api/rwa')
-        .set('x-api-key', API_KEY)
+        .set('x-api-key', LIMITED_KEY)
         .send({ ...VALID_BODY, contractId: id });
       statuses.push(res.status);
     }
