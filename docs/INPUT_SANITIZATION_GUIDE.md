@@ -6,6 +6,18 @@ To protect the RWA Marketplace against Cross-Site Scripting (XSS), SQL Injection
 The application utilizes **Knex.js** as its query builder. By default, Knex heavily relies on parameterized queries (`?` bindings in Postgres/SQLite). 
 **Rule:** Never use `knex.raw()` with string concatenation. If raw queries are strictly required for complex aggregations, always use bindings: `knex.raw('SELECT * FROM users WHERE id = ?', [userId])`.
 
+### SQL Injection Guard (Issue #356)
+
+A dedicated SQL Injection Guard (`src/services/sqlInjectionGuard.js`) provides multi-layered protection:
+
+- **Query Firewall**: Blocks dangerous DDL operations (DROP, TRUNCATE, ALTER, etc.)
+- **Pattern Detection**: Identifies 10+ categories of SQL injection patterns (UNION-based, stacked, blind, time-based, etc.)
+- **Complexity Analysis**: Scores queries and blocks overly complex constructions
+- **Anomaly Detection**: Monitors query patterns for unusual activity (brute force, complexity spikes)
+- **Audit Logging**: Records all queries for security monitoring
+
+See [SQL Injection Prevention Guide](./SQL_INJECTION_PREVENTION.md) for full documentation.
+
 ## 2. HTTP Request Sanitization
 The `requireSanitization` middleware intercepts all incoming HTTP traffic.
 - It deeply traverses `req.body`, `req.query`, and `req.params`.

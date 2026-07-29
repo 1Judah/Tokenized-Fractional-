@@ -10,8 +10,9 @@
  * - Migration rollback support (Issue #316)
  */
 
-import knex from 'knex';
+import knexModule from 'knex';
 import knexConfig from '../../knexfile.js';
+import { getSqlInjectionGuard, wrapKnexWithGuard } from './sqlInjectionGuard.js';
 
 let dbInstance = null;
 let poolMonitorInterval = null;
@@ -26,7 +27,11 @@ export async function initDatabase(environment = 'development') {
     return dbInstance;
   }
 
-  dbInstance = knex(knexConfig[environment]);
+  dbInstance = knexModule(knexConfig[environment]);
+
+  // Issue #356: Wrap knex with SQL injection guard for protection
+  const guard = getSqlInjectionGuard();
+  wrapKnexWithGuard(dbInstance, guard);
 
   // Run migrations
   try {
@@ -64,7 +69,7 @@ export function getPoolStats() {
     return null;
   }
 
-  const pool = dbInstance.client.pool;
+  const { pool } = dbInstance.client;
   if (!pool) {
     return null;
   }
@@ -77,9 +82,7 @@ export function getPoolStats() {
     maxConnections: pool.max || 20,
     minConnections: pool.min || 2,
     // Estimate pool utilization percentage
-    utilization: Math.round(
-      ((pool.numUsed() / (pool.max || 20)) * 100)
-    ),
+    utilization: Math.round((pool.numUsed() / (pool.max || 20)) * 100),
   };
 }
 
@@ -131,14 +134,12 @@ function startPoolMonitor() {
       // Log warning if pool utilization is high
       if (stats.utilization > 80) {
         console.warn(
-          `[DB Pool] High utilization: ${stats.utilization}% (${stats.usedConnections}/${stats.maxConnections} used)`
+          `[DB Pool] High utilization: ${stats.utilization}% (${stats.usedConnections}/${stats.maxConnections} used)`,
         );
       }
       // Log if there are pending requests (potential bottleneck)
       if (stats.pendingRequests > 0) {
-        console.warn(
-          `[DB Pool] ${stats.pendingRequests} pending connection requests`
-        );
+        console.warn(`[DB Pool] ${stats.pendingRequests} pending connection requests`);
       }
     }
   }, 30000);
@@ -234,15 +235,15 @@ export async function validateAllRollbacks() {
 
     return {
       totalTested: results.length,
-      passed: results.filter(r => r.success).length,
-      failed: results.filter(r => !r.success).length,
+      passed: results.filter((r) => r.success).length,
+      failed: results.filter((r) => !r.success).length,
       results,
     };
   } catch (error) {
     return {
       totalTested: results.length,
-      passed: results.filter(r => r.success).length,
-      failed: results.length - results.filter(r => r.success).length,
+      passed: results.filter((r) => r.success).length,
+      failed: results.length - results.filter((r) => r.success).length,
       error: error.message,
       results,
     };
