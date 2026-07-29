@@ -14,7 +14,7 @@ import styles from './AssetCard.module.css';
  * @param {string}  asset.contractId - On-chain contract ID
  * @param {string}  asset.assetType  - Type of asset
  */
-export default function AssetCard({ asset }) {
+export default function AssetCard({ asset, onAssetClick }) {
   if (!asset) return null;
 
   const {
@@ -27,7 +27,12 @@ export default function AssetCard({ asset }) {
   } = asset;
 
   return (
-    <Card hoverable className={styles.assetCard}>
+    <Card
+      hoverable
+      className={styles.assetCard}
+      onClick={onAssetClick ? () => onAssetClick(asset) : undefined}
+      style={onAssetClick ? { cursor: 'pointer' } : undefined}
+    >
       {imageUrl ? (
         <div className={styles.imageWrapper}>
           <img

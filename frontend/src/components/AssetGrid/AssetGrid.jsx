@@ -12,7 +12,7 @@ import styles from './AssetGrid.module.css';
  * @param {string}   error        - Error message if fetch failed
  * @param {boolean}  isEmpty      - True when fetch succeeded but returned 0 assets
  */
-export default function AssetGrid({ assets = [], loading = false, error = null, isEmpty = false }) {
+export default function AssetGrid({ assets = [], loading = false, error = null, isEmpty = false, onAssetClick = null }) {
   // ── Loading state ──────────────────────────────────────────────────────
   if (loading) {
     return (
@@ -71,7 +71,7 @@ export default function AssetGrid({ assets = [], loading = false, error = null, 
   return (
     <div className={styles.grid}>
       {assets.map((asset) => (
-        <AssetCard key={asset.contractId} asset={asset} />
+        <AssetCard key={asset.contractId} asset={asset} onAssetClick={onAssetClick} />
       ))}
     </div>
   );

@@ -101,3 +101,15 @@
     transform: rotate(360deg);
   }
 }
+
+/* Ghost Variant */
+.ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.ghost:hover:not(:disabled) {
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+}

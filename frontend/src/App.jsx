@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { signTransaction } from '@stellar/freighter-api';
 import { rpc, TransactionBuilder, Networks, Contract, nativeToScVal } from '@stellar/stellar-sdk';
 
@@ -15,6 +15,19 @@ import styles from './App.module.css';
 
 import { useWalletStore } from './store/useWalletStore';
 import { useAssetStore } from './store/useAssetStore';
+
+// ── Lazy-loaded feature components ────────────────────────────────────────────
+const AssetDetailPage = lazy(() =>
+  import('./components/AssetDetailPage/AssetDetailPage')
+);
+const WalletManager = lazy(() =>
+  import('./components/WalletManager/WalletManager')
+);
+const TransactionHistoryDashboard = lazy(() =>
+  import('./components/TransactionHistoryDashboard/TransactionHistoryDashboard')
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 const CONTRACT_ID = import.meta.env.VITE_CONTRACT_ID || 'C...';
 const RPC_URL = import.meta.env.VITE_RPC_URL || 'https://soroban-testnet.stellar.org:443';
@@ -49,7 +62,7 @@ function App() {
     clearAssets,
   } = useAssetStore();
 
-  // ── Local UI state (not global — scoped to this component) ────────────────
+  // ── Local UI state ────────────────────────────────────────────────────────
   const [buyAmount, setBuyAmount] = useState(1);
 
   // Granular loading states
@@ -60,12 +73,17 @@ function App() {
   const [error, setError] = useState(null);
   const [txError, setTxError] = useState(null);
   const [txResult, setTxResult] = useState(null);
-  const [theme, setTheme] = useState(() => {
-    return localStorage.getItem('theme') || 'dark';
-  });
 
-  // View state: 'marketplace' | 'admin'
+  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
+
+  // View state: 'marketplace' | 'admin' | 'asset-detail' | 'transactions'
   const [view, setView] = useState('marketplace');
+
+  // Selected asset for detail page
+  const [selectedAsset, setSelectedAsset] = useState(null);
+
+  // Wallet manager modal open state
+  const [walletManagerOpen, setWalletManagerOpen] = useState(false);
 
   // ── Theme ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -73,45 +91,37 @@ function App() {
     localStorage.setItem('theme', theme);
   }, [theme]);
 
-  const toggleTheme = () => {
-    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
-  };
+  const toggleTheme = () => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
 
-  // ── On mount: re-validate Freighter session ────────────────────────────────
-  // The persisted publicKey lets the UI render instantly; checkConnection()
-  // then confirms the Freighter session is still live in the background.
+  // ── On mount: re-validate wallet session ──────────────────────────────────
   useEffect(() => {
     checkConnection();
   }, [checkConnection]);
 
-  // ── Fetch chain data whenever wallet connects ──────────────────────────────
+  // ── Fetch chain data whenever wallet connects ─────────────────────────────
   useEffect(() => {
     if (publicKey) {
       fetchShares();
       fetchMetadata(CONTRACT_ID, API_URL);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [publicKey]);
 
-  // ── Fetch all assets on mount ──────────────────────────────────────────────
+  // ── Fetch all assets on mount ─────────────────────────────────────────────
   useEffect(() => {
     fetchAllAssets(API_URL);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Wallet actions ─────────────────────────────────────────────────────────
-  const connectWallet = async () => {
-    clearWalletError();
-    setTxError(null);
-    await connect();
-  };
-
+  // ── Wallet actions ────────────────────────────────────────────────────────
   const disconnectWallet = () => {
     disconnect();
     clearMeta();
     clearAssets();
     setTxResult(null);
     setTxError(null);
+    setView('marketplace');
+    setSelectedAsset(null);
   };
 
   const fetchShares = async () => {
@@ -144,10 +154,11 @@ function App() {
     }
   };
 
-  // ── Transactions ───────────────────────────────────────────────────────────
-  const handleBuyShares = async () => {
+  // ── Buy shares — accepts an optional qty (used by AssetDetailPage) ────────
+  const handleBuyShares = async (qty = buyAmount) => {
     if (!publicKey) return;
-    if (buyAmount < 1) {
+    const amount = Number(qty);
+    if (amount < 1) {
       setTxError('Must buy at least 1 share');
       return;
     }
@@ -161,7 +172,7 @@ function App() {
       const contract = new Contract(CONTRACT_ID);
 
       const scValBuyer = nativeToScVal(publicKey, { type: 'address' });
-      const scValShares = nativeToScVal(buyAmount, { type: 'u32' });
+      const scValShares = nativeToScVal(amount, { type: 'u32' });
 
       let tx = new TransactionBuilder(account, {
         fee: '10000',
@@ -172,9 +183,7 @@ function App() {
         .build();
 
       const simulation = await server.simulateTransaction(tx);
-      if (simulation.error) {
-        throw new Error(simulation.error);
-      }
+      if (simulation.error) throw new Error(simulation.error);
 
       tx = rpc.assembleTransaction(tx, simulation).build();
       const { signedTxXdr, error: signError } = await signTransaction(tx.toXDR(), {
@@ -188,6 +197,7 @@ function App() {
         TransactionBuilder.fromXDR(signedTxXdr, NETWORK_PASSPHRASE)
       );
 
+      setBuyAmount(1);
       setTxResult(`Transaction submitted! Hash: ${submitRes.hash}`);
       await fetchShares();
     } catch (err) {
@@ -204,10 +214,17 @@ function App() {
     }
   };
 
+  // ── Asset detail navigation ───────────────────────────────────────────────
+  const handleAssetClick = (asset) => {
+    setSelectedAsset(asset);
+    setView('asset-detail');
+  };
+
   const isTestnet = NETWORK_PASSPHRASE === Networks.TESTNET;
 
   return (
     <div className={styles.container}>
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
       <header className={styles.header}>
         <div className={styles.titleArea}>
           <div className={styles.titleRow}>
@@ -217,6 +234,7 @@ function App() {
             </Badge>
           </div>
         </div>
+
         <div className={styles.walletArea}>
           <button
             onClick={toggleTheme}
@@ -225,21 +243,32 @@ function App() {
             aria-label="Toggle theme"
           >
             {theme === 'dark' ? (
-              <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5" /><line x1="12" y1="1" x2="12" y2="3" /><line x1="12" y1="21" x2="12" y2="23" /><line x1="4.22" y1="4.22" x2="5.64" y2="5.64" /><line x1="18.36" y1="18.36" x2="19.78" y2="19.78" /><line x1="1" y1="12" x2="3" y2="12" /><line x1="21" y1="12" x2="23" y2="12" /><line x1="4.22" y1="19.78" x2="5.64" y2="18.36" /><line x1="18.36" y1="5.64" x2="19.78" y2="4.22" /></svg>
             ) : (
-              <svg viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+              <svg viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" /></svg>
             )}
           </button>
 
           {!publicKey ? (
-            <Button onClick={connectWallet} variant="success" loading={isConnecting}>
-              {isConnecting ? 'Connecting…' : 'Connect Freighter'}
+            /* Opens WalletManager when not connected */
+            <Button
+              onClick={() => setWalletManagerOpen(true)}
+              variant="success"
+              loading={isConnecting}
+            >
+              {isConnecting ? 'Connecting…' : 'Connect Wallet'}
             </Button>
           ) : (
             <div className={styles.walletInfo}>
-              <span className={styles.publicKey} title={publicKey}>
-                {publicKey}
-              </span>
+              {/* Clicking public key re-opens WalletManager */}
+              <button
+                className={styles.publicKey}
+                title={`${publicKey} — click to manage wallet`}
+                onClick={() => setWalletManagerOpen(true)}
+                aria-label="Manage wallet connection"
+              >
+                {publicKey.slice(0, 8)}…{publicKey.slice(-6)}
+              </button>
               <Button onClick={disconnectWallet} variant="danger">
                 Disconnect
               </Button>
@@ -248,14 +277,22 @@ function App() {
         </div>
       </header>
 
-      {/* Tab Navigation */}
+      {/* ── Tab Navigation ──────────────────────────────────────────────────── */}
       <nav className={styles.tabs}>
         <button
-          className={`${styles.tab} ${view === 'marketplace' ? styles.tabActive : ''}`}
-          onClick={() => setView('marketplace')}
+          className={`${styles.tab} ${view === 'marketplace' || view === 'asset-detail' ? styles.tabActive : ''}`}
+          onClick={() => { setView('marketplace'); setSelectedAsset(null); }}
         >
           Marketplace
         </button>
+        {publicKey && (
+          <button
+            className={`${styles.tab} ${view === 'transactions' ? styles.tabActive : ''}`}
+            onClick={() => setView('transactions')}
+          >
+            Transactions
+          </button>
+        )}
         <button
           className={`${styles.tab} ${view === 'admin' ? styles.tabActive : ''}`}
           onClick={() => setView('admin')}
@@ -264,123 +301,143 @@ function App() {
         </button>
       </nav>
 
-      {view === 'admin' ? (
+      {/* ── WalletManager modal (lazy) ───────────────────────────────────────── */}
+      <Suspense fallback={null}>
+        <WalletManager
+          isOpen={walletManagerOpen}
+          onClose={() => setWalletManagerOpen(false)}
+        />
+      </Suspense>
+
+      {/* ── Admin view ──────────────────────────────────────────────────────── */}
+      {view === 'admin' && (
         <AdminPage
           publicKey={publicKey}
           onDisconnect={() => setView('marketplace')}
         />
-      ) : (
+      )}
+
+      {/* ── Asset detail view (lazy) ─────────────────────────────────────────── */}
+      {view === 'asset-detail' && selectedAsset && (
+        <Suspense fallback={<div className={styles.suspenseFallback}><Spinner size="lg" label="Loading asset details…" /></div>}>
+          <AssetDetailPage
+            asset={selectedAsset}
+            onBack={() => { setView('marketplace'); setSelectedAsset(null); }}
+            publicKey={publicKey}
+            onBuyShares={handleBuyShares}
+          />
+        </Suspense>
+      )}
+
+      {/* ── Transactions view (lazy) ─────────────────────────────────────────── */}
+      {view === 'transactions' && (
+        <Suspense fallback={<div className={styles.suspenseFallback}><Spinner size="lg" label="Loading transactions…" /></div>}>
+          <TransactionHistoryDashboard publicKey={publicKey} />
+        </Suspense>
+      )}
+
+      {/* ── Marketplace view ─────────────────────────────────────────────────── */}
+      {view === 'marketplace' && (
         <>
-      {/* Wallet errors (connection issues) */}
-      {walletError && (
-        <Alert variant="error">
-          {walletError}
-        </Alert>
-      )}
+          {/* Wallet errors */}
+          {walletError && <Alert variant="error">{walletError}</Alert>}
 
-      {/* Transaction errors */}
-      {txError && (
-        <Alert variant="error">
-          {txError}
-        </Alert>
-      )}
+          {/* Transaction errors */}
+          {txError && <Alert variant="error">{txError}</Alert>}
 
-      {/* Transaction success */}
-      {txResult && (
-        <Alert variant="success">
-          {txResult}
-        </Alert>
-      )}
+          {/* Transaction success */}
+          {txResult && <Alert variant="success">{txResult}</Alert>}
 
-      {/* Contract not configured */}
-      {CONTRACT_ID === 'C...' && (
-        <Alert variant="warning">
-          Set VITE_CONTRACT_ID in frontend/.env to connect to a deployed contract.
-        </Alert>
-      )}
-
-      {/* ── Asset Metadata Card ─────────────────────────────────────────── */}
-      {loadingMeta ? (
-        <Card>
-          <div className={styles.assetImageWrapper}>
-            <Skeleton variant="rect" height="100%" style={{ borderRadius: 'var(--radius-sm)' }} />
-          </div>
-          <Skeleton variant="text" height="1.4em" width="55%" style={{ marginBottom: 'var(--spacing-xs)' }} />
-          <Skeleton variant="text" height="1em" width="35%" style={{ marginBottom: 'var(--spacing-sm)' }} />
-          <Skeleton variant="text" lines={3} style={{ marginBottom: 'var(--spacing-md)' }} />
-          <Skeleton variant="text" height="1.1em" width="40%" />
-        </Card>
-      ) : assetMeta ? (
-        <Card hoverable>
-          {assetMeta.imageUrl && (
-            <div className={styles.assetImageWrapper}>
-              <img src={assetMeta.imageUrl} alt={assetMeta.title} className={styles.assetImage} />
-            </div>
+          {/* Contract not configured */}
+          {CONTRACT_ID === 'C...' && (
+            <Alert variant="warning">
+              Set VITE_CONTRACT_ID in frontend/.env to connect to a deployed contract.
+            </Alert>
           )}
-          <h2 className={styles.assetTitle}>{assetMeta.title}</h2>
-          <p className={styles.assetLocation}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={styles.svgIcon}><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
-            {assetMeta.location}
-          </p>
-          <p className={styles.assetDescription}>{assetMeta.description}</p>
-          {assetMeta.totalValuation && (
-            <div className={styles.assetValuation}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={styles.svgIcon}><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
-              <span>Valuation: {assetMeta.totalValuation}</span>
-            </div>
-          )}
-        </Card>
-      ) : null}
 
-      {/* ── Asset Listing Grid ─────────────────────────────────────────── */}
-      <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>Available Assets</h2>
-        <AssetGrid
-          assets={assets}
-          loading={isFetchingAssets}
-          error={assetsError}
-          isEmpty={!isFetchingAssets && !assetsError && assets.length === 0}
-        />
-      </section>
+          {/* ── Asset Metadata Card ──────────────────────────────────────── */}
+          {loadingMeta ? (
+            <Card>
+              <div className={styles.assetImageWrapper}>
+                <Skeleton variant="rect" height="100%" style={{ borderRadius: 'var(--radius-sm)' }} />
+              </div>
+              <Skeleton variant="text" height="1.4em" width="55%" style={{ marginBottom: 'var(--spacing-xs)' }} />
+              <Skeleton variant="text" height="1em" width="35%" style={{ marginBottom: 'var(--spacing-sm)' }} />
+              <Skeleton variant="text" lines={3} style={{ marginBottom: 'var(--spacing-md)' }} />
+              <Skeleton variant="text" height="1.1em" width="40%" />
+            </Card>
+          ) : assetMeta ? (
+            <Card hoverable onClick={() => handleAssetClick(assetMeta)} style={{ cursor: 'pointer' }}>
+              {assetMeta.imageUrl && (
+                <div className={styles.assetImageWrapper}>
+                  <img src={assetMeta.imageUrl} alt={assetMeta.title} className={styles.assetImage} />
+                </div>
+              )}
+              <h2 className={styles.assetTitle}>{assetMeta.title}</h2>
+              <p className={styles.assetLocation}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={styles.svgIcon}><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" /><circle cx="12" cy="10" r="3" /></svg>
+                {assetMeta.location}
+              </p>
+              <p className={styles.assetDescription}>{assetMeta.description}</p>
+              {assetMeta.totalValuation && (
+                <div className={styles.assetValuation}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={styles.svgIcon}><line x1="12" y1="1" x2="12" y2="23" /><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+                  <span>Valuation: {assetMeta.totalValuation}</span>
+                </div>
+              )}
+            </Card>
+          ) : null}
 
-      {/* ── Holdings + Buy Card ─────────────────────────────────────────── */}
-      {publicKey && (
-        <Card>
-          <div className={styles.holdingsRow}>
-            <span className={styles.holdingsLabel}>Your Share Balance</span>
-            {loadingShares ? (
-              <span className={styles.holdingsValueLoading}>
-                <Spinner size="sm" label="Fetching share balance…" />
-                <Skeleton variant="text" width="3rem" height="1.6em" />
-              </span>
-            ) : (
-              <span className={styles.holdingsValue}>{shares}</span>
-            )}
-          </div>
-          <hr className={styles.divider} />
-          <h3 className={styles.purchaseHeader}>Buy Fractional Shares</h3>
-          <div className={styles.purchaseRow}>
-            <Input
-              id="buy-amount-input"
-              type="number"
-              value={buyAmount}
-              onChange={(e) => setBuyAmount(Math.max(1, Number(e.target.value)))}
-              min="1"
-              disabled={loadingBuy}
-              className={styles.buyInput}
+          {/* ── Asset Listing Grid ───────────────────────────────────────── */}
+          <section className={styles.section}>
+            <h2 className={styles.sectionTitle}>Available Assets</h2>
+            <AssetGrid
+              assets={assets}
+              loading={isFetchingAssets}
+              error={assetsError}
+              isEmpty={!isFetchingAssets && !assetsError && assets.length === 0}
+              onAssetClick={handleAssetClick}
             />
-            <Button onClick={handleBuyShares} loading={loadingBuy} variant="primary">
-              {loadingBuy ? 'Processing…' : 'Buy Shares'}
-            </Button>
-          </div>
-          {loadingBuy && (
-            <div className={styles.buyLoadingHint}>
-              <Spinner size="sm" label="Processing transaction…" />
-              <span>Submitting transaction to the network…</span>
-            </div>
+          </section>
+
+          {/* ── Holdings + Buy Card ──────────────────────────────────────── */}
+          {publicKey && (
+            <Card>
+              <div className={styles.holdingsRow}>
+                <span className={styles.holdingsLabel}>Your Share Balance</span>
+                {loadingShares ? (
+                  <span className={styles.holdingsValueLoading}>
+                    <Spinner size="sm" label="Fetching share balance…" />
+                    <Skeleton variant="text" width="3rem" height="1.6em" />
+                  </span>
+                ) : (
+                  <span className={styles.holdingsValue}>{shares}</span>
+                )}
+              </div>
+              <hr className={styles.divider} />
+              <h3 className={styles.purchaseHeader}>Buy Fractional Shares</h3>
+              <div className={styles.purchaseRow}>
+                <Input
+                  id="buy-amount-input"
+                  type="number"
+                  value={buyAmount}
+                  onChange={(e) => setBuyAmount(Math.max(1, Number(e.target.value)))}
+                  min="1"
+                  disabled={loadingBuy}
+                  className={styles.buyInput}
+                />
+                <Button onClick={() => handleBuyShares(buyAmount)} loading={loadingBuy} variant="primary">
+                  {loadingBuy ? 'Processing…' : 'Buy Shares'}
+                </Button>
+              </div>
+              {loadingBuy && (
+                <div className={styles.buyLoadingHint}>
+                  <Spinner size="sm" label="Processing transaction…" />
+                  <span>Submitting transaction to the network…</span>
+                </div>
+              )}
+            </Card>
           )}
-        </Card>
-      )}
         </>
       )}
     </div>
