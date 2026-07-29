@@ -241,12 +241,199 @@ export class TimeWindowService {
   }
 }
 
-/**
- * Factory function
- * @param {import('knex').Knex} db
- * @param {Object} logger
- * @returns {TimeWindowService}
- */
+  /**
+   * Get events for a time window using cursor-based pagination
+   *
+   * @param {string} contractId
+   * @param {string|number} windowId
+   * @param {Object} [options]
+   * @param {number} [options.limit=50]
+   * @param {string} [options.after] - Cursor for forward pagination
+   * @param {string} [options.before] - Cursor for backward pagination
+   * @returns {Promise<{data: Object[], pagination: Object}>}
+   */
+  async getWindowEventsCursor(contractId, windowId, options = {}) {
+    const { limit = 50, after, before } = options;
+
+    let query = this.db('time_window_events')
+      .where('contract_id', contractId)
+      .where('window_id', String(windowId));
+
+    const countQuery = this.db('time_window_events')
+      .where('contract_id', contractId)
+      .where('window_id', String(windowId))
+      .count('* as total').first();
+
+    const [{ total }] = await countQuery;
+    const totalCount = parseInt(total);
+
+    if (after) {
+      const cursor = Buffer.from(after, 'base64url').toString('utf-8');
+      const [eventId, createdAt] = cursor.split(':');
+      query = query.where(function () {
+        this.where('created_at', '<', new Date(createdAt))
+          .orWhere(function () {
+            this.where('created_at', '=', new Date(createdAt))
+              .andWhere('event_id', '<', eventId);
+          });
+      });
+    }
+
+    if (before) {
+      const cursor = Buffer.from(before, 'base64url').toString('utf-8');
+      const [eventId, createdAt] = cursor.split(':');
+      query = query.where(function () {
+        this.where('created_at', '>', new Date(createdAt))
+          .orWhere(function () {
+            this.where('created_at', '=', new Date(createdAt))
+              .andWhere('event_id', '>', eventId);
+          });
+      });
+    }
+
+    const orderDir = before ? 'asc' : 'desc';
+    const events = await query
+      .orderBy('created_at', orderDir)
+      .orderBy('event_id', orderDir)
+      .limit(limit + 1);
+
+    const hasMore = events.length > limit;
+    if (hasMore) events.pop();
+
+    if (before) events.reverse();
+
+    const data = events;
+    const hasNext = after ? hasMore : (!before && hasMore);
+    const hasPrev = before ? hasMore : false;
+
+    const pagination = {
+      limit,
+      total: totalCount,
+      hasNext,
+      hasPrev,
+    };
+
+    if (hasNext && data.length > 0) {
+      const last = data[data.length - 1];
+      pagination.nextCursor = Buffer.from(`${last.event_id}:${last.created_at.toISOString()}`).toString('base64url');
+    }
+
+    if (hasPrev && data.length > 0) {
+      const first = data[0];
+      pagination.prevCursor = Buffer.from(`${first.event_id}:${first.created_at.toISOString()}`).toString('base64url');
+    }
+
+    return { data, pagination };
+  }
+
+  /**
+   * Get all events for an asset's time windows using cursor-based pagination
+   *
+   * @param {string} contractId
+   * @param {Object} [options]
+   * @param {string} [options.eventType] - Filter by event type
+   * @param {string} [options.from] - Start date ISO string
+   * @param {string} [options.to] - End date ISO string
+   * @param {number} [options.limit=100]
+   * @param {string} [options.after] - Cursor for forward pagination
+   * @param {string} [options.before] - Cursor for backward pagination
+   * @returns {Promise<{data: Object[], pagination: Object}>}
+   */
+  async getAssetWindowEventsCursor(contractId, options = {}) {
+    const { eventType, from, to, limit = 100, after, before } = options;
+
+    let query = this.db('time_window_events')
+      .where('contract_id', contractId);
+
+    let countQuery = this.db('time_window_events')
+      .where('contract_id', contractId);
+
+    if (eventType) {
+      query = query.where('event_type', eventType);
+      countQuery = countQuery.where('event_type', eventType);
+    }
+    if (from) {
+      query = query.where('created_at', '>=', new Date(from));
+      countQuery = countQuery.where('created_at', '>=', new Date(from));
+    }
+    if (to) {
+      query = query.where('created_at', '<=', new Date(to));
+      countQuery = countQuery.where('created_at', '<=', new Date(to));
+    }
+
+    const [{ total }] = await countQuery.count('* as total').first();
+    const totalCount = parseInt(total);
+
+    if (after) {
+      const cursor = Buffer.from(after, 'base64url').toString('utf-8');
+      const [eventId, createdAt] = cursor.split(':');
+      query = query.where(function () {
+        this.where('created_at', '<', new Date(createdAt))
+          .orWhere(function () {
+            this.where('created_at', '=', new Date(createdAt))
+              .andWhere('event_id', '<', eventId);
+          });
+      });
+    }
+
+    if (before) {
+      const cursor = Buffer.from(before, 'base64url').toString('utf-8');
+      const [eventId, createdAt] = cursor.split(':');
+      query = query.where(function () {
+        this.where('created_at', '>', new Date(createdAt))
+          .orWhere(function () {
+            this.where('created_at', '=', new Date(createdAt))
+              .andWhere('event_id', '>', eventId);
+          });
+      });
+    }
+
+    const orderDir = before ? 'asc' : 'desc';
+    const events = await query
+      .orderBy('created_at', orderDir)
+      .orderBy('event_id', orderDir)
+      .limit(limit + 1);
+
+    const hasMore = events.length > limit;
+    if (hasMore) events.pop();
+
+    if (before) events.reverse();
+
+    const data = events;
+    const hasNext = after ? hasMore : (!before && hasMore);
+    const hasPrev = before ? hasMore : false;
+
+    const pagination = {
+      limit,
+      total: totalCount,
+      hasNext,
+      hasPrev,
+    };
+
+    if (hasNext && data.length > 0) {
+      const last = data[data.length - 1];
+      pagination.nextCursor = Buffer.from(`${last.event_id}:${last.created_at.toISOString()}`).toString('base64url');
+    }
+
+    if (hasPrev && data.length > 0) {
+      const first = data[0];
+      pagination.prevCursor = Buffer.from(`${first.event_id}:${first.created_at.toISOString()}`).toString('base64url');
+    }
+
+    return { data, pagination };
+  }
+
+  /**
+   * Factory function
+   * @param {import('knex').Knex} db
+   * @param {Object} logger
+   * @returns {TimeWindowService}
+   */
+  static create(db, logger) {
+    return new TimeWindowService(db, logger);
+  }
+}
+
 export function createTimeWindowService(db, logger) {
   return new TimeWindowService(db, logger);
 }

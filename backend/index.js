@@ -16,6 +16,8 @@ import { RateLimitAnalytics } from './src/services/rateLimitAnalytics.js';
 import { BillingService } from './src/services/billingService.js';
 import { createRateLimiter } from './src/middleware/rateLimiter.js';
 import { createRateLimitAdminRoutes } from './src/routes/rateLimitAdmin.js';
+import { applyCursorPagination, CursorError, paginationErrorHandler, SORT_FIELDS } from './src/services/cursorPagination.js';
+import { parsePaginationParams } from './src/middleware/cursorPagination.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3001;
@@ -209,42 +211,22 @@ app.get('/health', async (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString(), dependencies: deps });
 });
 
-// GET /api/rwa?page=1&limit=20&assetType=real_estate&search=coffee
-app.get('/api/rwa', (req, res) => {
-  const data = loadData();
-  let assets = Object.entries(data).map(([contractId, meta]) => ({ contractId, ...meta }));
+// GET /api/rwa?after=<cursor>&before=<cursor>&limit=20&sort=createdAt&order=desc&assetType=real_estate&search=coffee
+app.get('/api/rwa', (req, res, next) => {
+  try {
+    const data = loadData();
+    const assets = Object.entries(data).map(([contractId, meta]) => ({ contractId, ...meta }));
 
-  // Filter: assetType (case-insensitive)
-  const { assetType, search, page, limit } = req.query;
-  if (assetType) {
-    const lower = assetType.toLowerCase();
-    assets = assets.filter(a => a.assetType?.toLowerCase() === lower);
+    const paginationParams = parsePaginationParams(req);
+    const result = applyCursorPagination(assets, paginationParams);
+
+    res.json(result);
+
+    // Cache the asset list result (fire-and-forget)
+    cacheSet('rwa:all', result).catch(() => {});
+  } catch (error) {
+    next(error);
   }
-
-  // Filter: text search on title and description
-  if (search) {
-    const lower = search.toLowerCase();
-    assets = assets.filter(a =>
-      a.title?.toLowerCase().includes(lower) ||
-      a.description?.toLowerCase().includes(lower)
-    );
-  }
-
-  const total = assets.length;
-  const pageNum = Math.max(1, parseInt(page) || 1);
-  const pageSize = Math.min(100, Math.max(1, parseInt(limit) || 20));
-  const totalPages = Math.ceil(total / pageSize) || 1;
-  const offset = (pageNum - 1) * pageSize;
-
-  assets = assets.slice(offset, offset + pageSize);
-
-  res.json({
-    data: assets,
-    pagination: { total, page: pageNum, limit: pageSize, totalPages },
-  });
-
-  // Cache the full asset list (fire-and-forget)
-  cacheSet('rwa:all', { data: assets, pagination: { total, page: pageNum, limit: pageSize, totalPages } }).catch(() => {});
 });
 
 app.get('/api/rwa/:contractId', async (req, res) => {
@@ -309,6 +291,9 @@ app.delete('/api/rwa/:contractId', adminAuth, writeLimiter, async (req, res) => 
   req.log?.info({ contractId }, 'Asset deleted');
   res.json({ message: 'Asset metadata deleted', contractId });
 });
+
+// Cursor pagination error handler
+app.use(paginationErrorHandler);
 
 app.use((_req, res) => {
   res.status(404).json({ error: 'Not found' });
