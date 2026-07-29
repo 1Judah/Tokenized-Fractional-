@@ -81,6 +81,12 @@ pub enum DataKey {
     PendingTransferApproval(u64),
     /// Next transfer approval ID
     NextTransferApprovalId,
+
+    /// Vesting history entry by index
+    VestingHistory(u64),
+    /// Vesting history index counter
+    VestingHistoryIndex,
+
     /// Reentrancy guard
     ReentrancyGuard,
     /// Compliance whitelist for transfers
@@ -95,6 +101,25 @@ pub struct VestingSchedule {
     pub duration: u64,
     pub total_amount: u32,
     pub claimed_amount: u32,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct VestingSummary {
+    pub total_vested: u32,
+    pub total_claimed: u32,
+    pub total_locked: u32,
+    pub claimable_now: u32,
+    pub active_schedule_count: u32,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct VestingClaimRecord {
+    pub owner: Address,
+    pub amount: u32,
+    pub remaining_locked: u32,
+    pub timestamp: u64,
 }
 
 /// SIP-4 contract metadata returned at runtime by get_contract_metadata()
@@ -389,6 +414,31 @@ pub struct EventApproval {
     owner: Address,
     spender: Address,
     amount: u32,
+}
+
+
+// ── Vesting Events ────────────────────────────────────────────────────────
+
+#[contractevent(data_format = "vec")]
+pub struct EventVestingScheduleCreated {
+    pub owner: Address,
+    pub total_amount: u32,
+    pub duration: u64,
+    pub cliff: u64,
+    pub start: u64,
+}
+
+#[contractevent(data_format = "vec")]
+pub struct EventVestingSharesClaimed {
+    pub owner: Address,
+    pub amount: u32,
+    pub remaining_locked: u32,
+}
+
+#[contractevent(data_format = "vec")]
+pub struct EventVestingAccelerated {
+    pub owner: Address,
+    pub additional_vested: u32,
 }
 
 
@@ -1206,7 +1256,15 @@ impl RwaMarketplace {
 
         Self::set_vesting_schedules(&env, &claimer, &updated_schedules);
 
-        EventClaimVestedShares { claimer, amount: total_claimable }.publish(&env);
+        // Record vesting claim history
+        let remaining = Self::get_locked_shares(env.clone(), claimer.clone());
+        Self::record_vesting_claim(&env, &claimer, total_claimable, remaining);
+
+        EventVestingSharesClaimed {
+            owner: claimer.clone(),
+            amount: total_claimable,
+            remaining_locked: remaining,
+        }.publish(&env);
     }
 
     pub fn get_vesting_schedules(env: Env, owner: Address) -> Vec<VestingSchedule> {
@@ -1224,6 +1282,68 @@ impl RwaMarketplace {
             locked = locked.saturating_add(schedule.total_amount.saturating_sub(schedule.claimed_amount));
         }
         locked
+    }
+
+    // ── Vesting Analytics & History ────────────────────────────────────
+
+    /// Return a comprehensive vesting summary for an address.
+    /// Includes total vested, total claimed, total locked, claimable now, and schedule count.
+    pub fn get_vesting_summary(env: Env, owner: Address) -> VestingSummary {
+        let schedules = Self::load_vesting_schedules(&env, &owner);
+        let now = env.ledger().timestamp();
+        let mut total_vested: u32 = 0;
+        let mut total_claimed: u32 = 0;
+        let mut claimable_now: u32 = 0;
+        let mut active_schedules: u32 = 0;
+
+        for schedule in schedules.iter() {
+            let vested = Self::compute_vested_amount(&schedule, now);
+            total_vested = total_vested.saturating_add(vested);
+            total_claimed = total_claimed.saturating_add(schedule.claimed_amount);
+            let available = vested.saturating_sub(schedule.claimed_amount);
+            claimable_now = claimable_now.saturating_add(available);
+            if schedule.total_amount > schedule.claimed_amount {
+                active_schedules += 1;
+            }
+        }
+
+        VestingSummary {
+            total_vested,
+            total_claimed,
+            total_locked: total_vested.saturating_sub(total_claimed),
+            claimable_now,
+            active_schedule_count: active_schedules,
+        }
+    }
+
+    /// Record a vesting claim in the vesting history.
+    fn record_vesting_claim(env: &Env, owner: &Address, claimed: u32, remaining_locked: u32) {
+        let index: u64 = env.storage().instance().get(&DataKey::VestingHistoryIndex).unwrap_or(0);
+        let entry = VestingClaimRecord {
+            owner: owner.clone(),
+            amount: claimed,
+            remaining_locked,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.storage().persistent().set(&DataKey::VestingHistory(index), &entry);
+        env.storage().instance().set(&DataKey::VestingHistoryIndex, &(index + 1));
+    }
+
+    /// Return vesting history for a given address (pagination by start index + limit).
+    pub fn get_vesting_history(env: Env, owner: Address, start_idx: u64, limit: u32) -> Vec<VestingClaimRecord> {
+        let total: u64 = env.storage().instance().get(&DataKey::VestingHistoryIndex).unwrap_or(0);
+        let mut result: Vec<VestingClaimRecord> = Vec::new(&env);
+        let end = core::cmp::min(total, start_idx.saturating_add(limit as u64));
+        let mut i = start_idx;
+        while i < end {
+            if let Some(entry) = env.storage().persistent().get::<DataKey, VestingClaimRecord>(&DataKey::VestingHistory(i)) {
+                if entry.owner == owner {
+                    result.push_back(entry);
+                }
+            }
+            i += 1;
+        }
+        result
     }
 
     /// Returns the current list of registered holders.
@@ -4768,7 +4888,6 @@ mod test {
         c.process_auto_buyback(&te.buyer, &10);
     }
 
-<<<<<<< HEAD
     // ── NFT minting tests ───────────────────────────────────────────────
 
     use share_certificate_nft::ShareCertificate;
@@ -4787,17 +4906,10 @@ mod test {
 
     #[test]
     fn test_set_and_get_nft_contract() {
-=======
-    // ── Secure Transfer Function Tests ───────────────────────────────────
-
-    #[test]
-    fn test_set_transfer_fee_config() {
->>>>>>> f45fdb2 (Implement secure share transfer function with comprehensive features)
         let te = setup();
         let c = client(&te);
         c.init(&te.admin, &te.token_id, &100, &1000);
 
-<<<<<<< HEAD
         let nft_id = setup_nft(&te);
         c.set_nft_contract(&nft_id);
         assert_eq!(c.get_nft_contract(), Some(nft_id));
@@ -4814,7 +4926,64 @@ mod test {
 
     #[test]
     fn test_buy_shares_mints_nfts() {
-=======
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+
+        let nft_id = setup_nft(&te);
+        c.set_nft_contract(&nft_id);
+
+        c.buy_shares(&te.buyer, &3, &te.token_id);
+
+        // 3 shares purchased → 3 NFTs minted
+        use stellar_tokens::non_fungible::Base;
+        te.env.as_contract(&nft_id, || {
+            assert_eq!(Base::balance(&te.env, &te.buyer), 3);
+        });
+    }
+
+    #[test]
+    fn test_buy_shares_without_nft_contract_still_works() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+
+        // No NFT contract configured — buy_shares should succeed normally
+        c.buy_shares(&te.buyer, &5, &te.token_id);
+        assert_eq!(c.get_shares(&te.buyer), 5);
+    }
+
+    #[test]
+    fn test_nft_owner_is_buyer() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+
+        let nft_id = setup_nft(&te);
+        c.set_nft_contract(&nft_id);
+
+        c.buy_shares(&te.buyer, &1, &te.token_id);
+
+        use stellar_tokens::non_fungible::Base;
+        te.env.as_contract(&nft_id, || {
+            assert_eq!(Base::owner_of(&te.env, 0), te.buyer);
+        });
+    }
+
+    // ── Secure Transfer Function Tests ───────────────────────────────────
+
+    #[test]
+    fn test_set_transfer_fee_config() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+
         c.set_transfer_fee_config(&100, &te.admin, &1000);
         let config = c.get_transfer_fee_config().unwrap();
         assert_eq!(config.fee_bps, 100);
@@ -4842,30 +5011,13 @@ mod test {
 
     #[test]
     fn test_transfer_with_fee() {
->>>>>>> f45fdb2 (Implement secure share transfer function with comprehensive features)
         let te = setup();
         let c = client(&te);
         c.init(&te.admin, &te.token_id, &100, &1000);
         mint(&te, &te.buyer, 100_000);
         c.add_to_whitelist(&te.buyer);
-<<<<<<< HEAD
 
-        let nft_id = setup_nft(&te);
-        c.set_nft_contract(&nft_id);
-
-        c.buy_shares(&te.buyer, &3, &te.token_id);
-
-        // 3 shares purchased → 3 NFTs minted
-        use stellar_tokens::non_fungible::Base;
-        te.env.as_contract(&nft_id, || {
-            assert_eq!(Base::balance(&te.env, &te.buyer), 3);
-        });
-    }
-
-    #[test]
-    fn test_buy_shares_without_nft_contract_still_works() {
-=======
-        c.buy_shares(&te.buyer, &50);
+        c.buy_shares(&te.buyer, &50, &te.token_id);
 
         let fee_recipient = Address::generate(&te.env);
         c.set_transfer_fee_config(&100, &fee_recipient, &1000); // 1% fee
@@ -4892,7 +5044,7 @@ mod test {
         c.init(&te.admin, &te.token_id, &100, &1000);
         mint(&te, &te.buyer, 100_000);
         c.add_to_whitelist(&te.buyer);
-        c.buy_shares(&te.buyer, &100);
+        c.buy_shares(&te.buyer, &100, &te.token_id);
 
         let recipient1 = Address::generate(&te.env);
         let recipient2 = Address::generate(&te.env);
@@ -4922,7 +5074,7 @@ mod test {
         c.init(&te.admin, &te.token_id, &100, &1000);
         mint(&te, &te.buyer, 100_000);
         c.add_to_whitelist(&te.buyer);
-        c.buy_shares(&te.buyer, &50);
+        c.buy_shares(&te.buyer, &50, &te.token_id);
 
         let recipients: Vec<Address> = Vec::new(&te.env);
         let amounts: Vec<u32> = Vec::new(&te.env);
@@ -4937,7 +5089,7 @@ mod test {
         c.init(&te.admin, &te.token_id, &100, &1000);
         mint(&te, &te.buyer, 100_000);
         c.add_to_whitelist(&te.buyer);
-        c.buy_shares(&te.buyer, &50);
+        c.buy_shares(&te.buyer, &50, &te.token_id);
 
         let mut recipients: Vec<Address> = Vec::new(&te.env);
         recipients.push_back(Address::generate(&te.env));
@@ -4986,7 +5138,7 @@ mod test {
         c.init(&te.admin, &te.token_id, &100, &1000);
         mint(&te, &te.buyer, 100_000);
         c.add_to_whitelist(&te.buyer);
-        c.buy_shares(&te.buyer, &50);
+        c.buy_shares(&te.buyer, &50, &te.token_id);
 
         let future_time = te.env.ledger().timestamp() + 10000;
         c.set_transfer_restrictions(&te.buyer, &future_time, &100, &false);
@@ -5004,7 +5156,7 @@ mod test {
         c.init(&te.admin, &te.token_id, &100, &1000);
         mint(&te, &te.buyer, 100_000);
         c.add_to_whitelist(&te.buyer);
-        c.buy_shares(&te.buyer, &50);
+        c.buy_shares(&te.buyer, &50, &te.token_id);
 
         let past_time = te.env.ledger().timestamp() - 1000;
         c.set_transfer_restrictions(&te.buyer, &past_time, &5, &false);
@@ -5022,7 +5174,7 @@ mod test {
         c.init(&te.admin, &te.token_id, &100, &1000);
         mint(&te, &te.buyer, 100_000);
         c.add_to_whitelist(&te.buyer);
-        c.buy_shares(&te.buyer, &50);
+        c.buy_shares(&te.buyer, &50, &te.token_id);
 
         let past_time = te.env.ledger().timestamp() - 1000;
         c.set_transfer_restrictions(&te.buyer, &past_time, &100, &true);
@@ -5039,7 +5191,7 @@ mod test {
         c.init(&te.admin, &te.token_id, &100, &1000);
         mint(&te, &te.buyer, 100_000);
         c.add_to_whitelist(&te.buyer);
-        c.buy_shares(&te.buyer, &50);
+        c.buy_shares(&te.buyer, &50, &te.token_id);
 
         let recipient = Address::generate(&te.env);
         let approval_id = c.request_transfer_approval(&te.buyer, &recipient, &10);
@@ -5059,7 +5211,7 @@ mod test {
         c.init(&te.admin, &te.token_id, &100, &1000);
         mint(&te, &te.buyer, 100_000);
         c.add_to_whitelist(&te.buyer);
-        c.buy_shares(&te.buyer, &50);
+        c.buy_shares(&te.buyer, &50, &te.token_id);
 
         let recipient = Address::generate(&te.env);
         c.add_to_whitelist(&recipient);
@@ -5082,7 +5234,7 @@ mod test {
         c.init(&te.admin, &te.token_id, &100, &1000);
         mint(&te, &te.buyer, 100_000);
         c.add_to_whitelist(&te.buyer);
-        c.buy_shares(&te.buyer, &50);
+        c.buy_shares(&te.buyer, &50, &te.token_id);
 
         let recipient = Address::generate(&te.env);
         c.add_to_whitelist(&recipient);
@@ -5115,7 +5267,7 @@ mod test {
         c.init(&te.admin, &te.token_id, &100, &1000);
         mint(&te, &te.buyer, 100_000);
         c.add_to_whitelist(&te.buyer);
-        c.buy_shares(&te.buyer, &50);
+        c.buy_shares(&te.buyer, &50, &te.token_id);
 
         let recipient = Address::generate(&te.env);
         c.add_to_whitelist(&recipient);
@@ -5131,7 +5283,7 @@ mod test {
         c.init(&te.admin, &te.token_id, &100, &1000);
         mint(&te, &te.buyer, 100_000);
         c.add_to_whitelist(&te.buyer);
-        c.buy_shares(&te.buyer, &50);
+        c.buy_shares(&te.buyer, &50, &te.token_id);
 
         let recipient = Address::generate(&te.env);
         c.add_to_whitelist(&recipient);
@@ -5153,7 +5305,7 @@ mod test {
         c.init(&te.admin, &te.token_id, &100, &1000);
         mint(&te, &te.buyer, 100_000);
         c.add_to_whitelist(&te.buyer);
-        c.buy_shares(&te.buyer, &50);
+        c.buy_shares(&te.buyer, &50, &te.token_id);
 
         let recipient = Address::generate(&te.env);
         c.add_to_whitelist(&recipient);
@@ -5170,24 +5322,14 @@ mod test {
     #[test]
     #[should_panic(expected = "Cannot transfer vested shares")]
     fn test_transfer_vested_shares_blocked() {
->>>>>>> f45fdb2 (Implement secure share transfer function with comprehensive features)
         let te = setup();
         let c = client(&te);
         c.init(&te.admin, &te.token_id, &100, &1000);
         mint(&te, &te.buyer, 100_000);
         c.add_to_whitelist(&te.buyer);
 
-<<<<<<< HEAD
-        // No NFT contract configured — buy_shares should succeed normally
-        c.buy_shares(&te.buyer, &5, &te.token_id);
-        assert_eq!(c.get_shares(&te.buyer), 5);
-    }
-
-    #[test]
-    fn test_nft_owner_is_buyer() {
-=======
         // Buy vested shares
-        c.buy_vested_shares(&te.buyer, &50, &3600);
+        c.buy_vested_shares(&te.buyer, &50, &3600, &te.token_id);
 
         // Try to transfer more than liquid balance (which is 0)
         let recipient = Address::generate(&te.env);
@@ -5197,27 +5339,15 @@ mod test {
 
     #[test]
     fn test_transfer_liquid_shares_after_vesting() {
->>>>>>> f45fdb2 (Implement secure share transfer function with comprehensive features)
         let te = setup();
         let c = client(&te);
         c.init(&te.admin, &te.token_id, &100, &1000);
         mint(&te, &te.buyer, 100_000);
         c.add_to_whitelist(&te.buyer);
 
-<<<<<<< HEAD
-        let nft_id = setup_nft(&te);
-        c.set_nft_contract(&nft_id);
-
-        c.buy_shares(&te.buyer, &1, &te.token_id);
-
-        use stellar_tokens::non_fungible::Base;
-        te.env.as_contract(&nft_id, || {
-            assert_eq!(Base::owner_of(&te.env, 0), te.buyer);
-        });
-=======
         // Buy both liquid and vested shares
-        c.buy_shares(&te.buyer, &30);
-        c.buy_vested_shares(&te.buyer, &20, &3600);
+        c.buy_shares(&te.buyer, &30, &te.token_id);
+        c.buy_vested_shares(&te.buyer, &20, &3600, &te.token_id);
 
         // Should be able to transfer liquid shares
         let recipient = Address::generate(&te.env);
@@ -5235,7 +5365,7 @@ mod test {
         c.init(&te.admin, &te.token_id, &100, &1000);
         mint(&te, &te.buyer, 100_000);
         c.add_to_whitelist(&te.buyer);
-        c.buy_shares(&te.buyer, &50);
+        c.buy_shares(&te.buyer, &50, &te.token_id);
 
         let spender = Address::generate(&te.env);
         let recipient = Address::generate(&te.env);
@@ -5255,7 +5385,7 @@ mod test {
         c.init(&te.admin, &te.token_id, &100, &1000);
         mint(&te, &te.buyer, 100_000);
         c.add_to_whitelist(&te.buyer);
-        c.buy_shares(&te.buyer, &100);
+        c.buy_shares(&te.buyer, &100, &te.token_id);
 
         let fee_recipient = Address::generate(&te.env);
         c.set_transfer_fee_config(&100, &fee_recipient, &1000); // 1% fee
@@ -5279,7 +5409,6 @@ mod test {
         let token_client = token::TokenClient::new(&te.env, &te.token_id);
         assert_eq!(token_client.balance(&te.buyer), 100_000 - 100*100 - 50); // 100*100 cost + 50 fee
         assert_eq!(token_client.balance(&fee_recipient), 50);
->>>>>>> f45fdb2 (Implement secure share transfer function with comprehensive features)
     }
 
     // ── Re-entrancy guard tests ───────────────────────────────────────────────
@@ -5938,6 +6067,109 @@ mod property_tests {
         }
     }
 }
+// ── Vesting Analytics & History Tests ─────────────────────────────
+
+#[cfg(test)]
+mod vesting_analytics_tests {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+    use token::TokenClient;
+
+    struct TestEnv {
+        env: soroban_sdk::Env,
+        contract_id: Address,
+        admin: Address,
+        buyer: Address,
+        token_id: Address,
+    }
+
+    fn setup() -> TestEnv {
+        let env = soroban_sdk::Env::default();
+        let admin = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let token_id = Address::generate(&env);
+
+        let contract_id = env.register(RwaMarketplace, ());
+        let c = RwaMarketplaceClient::new(&env, &contract_id);
+        c.init(&admin, &token_id, &100, &1000);
+
+        // Mint tokens and whitelist buyer for test setup
+        let token_client = TokenClient::new(&env, &token_id);
+        token_client.mint(&buyer, &100_000_i128);
+        c.add_to_whitelist(&buyer);
+
+        TestEnv {
+            env,
+            contract_id,
+            admin,
+            buyer,
+            token_id,
+        }
+    }
+
+    #[test]
+    fn test_get_vesting_summary_with_no_schedules() {
+        let te = setup();
+        let c = RwaMarketplaceClient::new(&te.env, &te.contract_id);
+        let summary = c.get_vesting_summary(&te.buyer);
+        assert_eq!(summary.total_vested, 0);
+        assert_eq!(summary.total_claimed, 0);
+        assert_eq!(summary.total_locked, 0);
+        assert_eq!(summary.claimable_now, 0);
+        assert_eq!(summary.active_schedule_count, 0);
+    }
+
+    #[test]
+    fn test_get_vesting_summary_after_buy() {
+        let te = setup();
+        let c = RwaMarketplaceClient::new(&te.env, &te.contract_id);
+
+        // Buy liquid (non-vested) shares
+        c.buy_shares(&te.buyer, &50, &te.token_id);
+
+        let summary = c.get_vesting_summary(&te.buyer);
+        // Liquid shares are not tracked as vesting schedules
+        assert_eq!(summary.active_schedule_count, 0);
+        assert_eq!(summary.total_vested, 0);
+    }
+
+    #[test]
+    fn test_get_vesting_summary_after_vested_buy() {
+        let te = setup();
+        let c = RwaMarketplaceClient::new(&te.env, &te.contract_id);
+
+        // Buy vested shares with a duration
+        c.buy_vested_shares(&te.buyer, &20, &3600, &te.token_id);
+
+        let summary = c.get_vesting_summary(&te.buyer);
+        // At time 0 with cliff=0 and duration=3600, nothing is vested yet
+        assert_eq!(summary.active_schedule_count, 1);
+        assert_eq!(summary.total_vested, 0);
+    }
+
+    #[test]
+    fn test_get_vesting_history_empty() {
+        let te = setup();
+        let c = RwaMarketplaceClient::new(&te.env, &te.contract_id);
+        c.buy_vested_shares(&te.buyer, &10, &3600, &te.token_id);
+
+        // No claims made yet so history should be empty
+        let history = c.get_vesting_history(&te.buyer, &0, &10);
+        assert_eq!(history.len(), 0);
+    }
+
+    #[test]
+    fn test_claimable_shares_after_vested_buy() {
+        let te = setup();
+        let c = RwaMarketplaceClient::new(&te.env, &te.contract_id);
+        c.buy_vested_shares(&te.buyer, &20, &3600, &te.token_id);
+
+        // Initially no shares are claimable (duration hasn't passed)
+        let claimable = c.get_claimable_vested_shares(&te.buyer);
+        assert_eq!(claimable, 0);
+    }
+}
+
 // ====================== CONTRACT UPGRADEABILITY (#6) ======================
 
 #[contractevent(data_format = "vec")]
