@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { memo } from 'react';
 import styles from './Button.module.css';
 
-export default function Button({
+function Button({
   children,
   variant = 'primary',
   disabled = false,
@@ -9,9 +9,10 @@ export default function Button({
   onClick,
   className = '',
   type = 'button',
+  size,
   ...rest
 }) {
-  const buttonClass = `${styles.button} ${styles[variant]} ${className}`;
+  const buttonClass = `${styles.button} ${styles[variant]} ${size ? styles[size] : ''} ${className}`;
 
   return (
     <button
@@ -26,3 +27,5 @@ export default function Button({
     </button>
   );
 }
+
+export default memo(Button);

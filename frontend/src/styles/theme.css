@@ -14,6 +14,10 @@
   --primary: #3b82f6;
   --primary-hover: #2563eb;
   --primary-glow: rgba(59, 130, 246, 0.15);
+  --primary-bg: rgba(59, 130, 246, 0.1);
+  --primary-border: rgba(59, 130, 246, 0.25);
+  --primary-text: #60a5fa;
+  --primary-light: #dbeafe;
 
   --success: #10b981;
   --success-bg: rgba(16, 185, 129, 0.1);
@@ -30,8 +34,13 @@
   --warning-border: rgba(245, 158, 11, 0.25);
   --warning-text: #fbbf24;
 
+  --info: #06b6d4;
+  --info-bg: rgba(6, 182, 212, 0.1);
+  --info-border: rgba(6, 182, 212, 0.25);
+  --info-text: #22d3ee;
+
   /* Typography */
-  --font-sans: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-sans: 'Outfit', 'Outfit-fallback', 'Inter', 'Inter-fallback', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   
   --font-size-xs: 0.75rem;
   --font-size-sm: 0.875rem;
@@ -54,7 +63,7 @@
   --spacing-2xl: 3rem;
 
   /* Layout */
-  --max-width-content: 760px;
+  --max-width-content: 900px;
 
   /* Border Radius */
   --radius-sm: 6px;
@@ -88,6 +97,10 @@
   --primary: #2563eb;
   --primary-hover: #1d4ed8;
   --primary-glow: rgba(37, 99, 235, 0.08);
+  --primary-bg: rgba(37, 99, 235, 0.06);
+  --primary-border: rgba(37, 99, 235, 0.15);
+  --primary-text: #3b82f6;
+  --primary-light: #dbeafe;
 
   --success-bg: rgba(16, 185, 129, 0.06);
   --success-border: rgba(16, 185, 129, 0.15);
@@ -100,6 +113,10 @@
   --warning-bg: rgba(217, 119, 6, 0.06);
   --warning-border: rgba(217, 119, 6, 0.15);
   --warning-text: #b45309;
+
+  --info-bg: rgba(6, 182, 212, 0.06);
+  --info-border: rgba(6, 182, 212, 0.15);
+  --info-text: #0891b2;
 
   --shadow-glow: 0 0 20px rgba(37, 99, 235, 0.04);
 }
