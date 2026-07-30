@@ -29,3 +29,21 @@
   border-color: var(--warning-border);
   color: var(--warning-text);
 }
+
+.primary {
+  background-color: var(--primary-glow);
+  border-color: rgba(59, 130, 246, 0.3);
+  color: var(--primary);
+}
+
+.info {
+  background-color: rgba(99, 179, 237, 0.1);
+  border-color: rgba(99, 179, 237, 0.3);
+  color: #63b3ed;
+}
+
+.default {
+  background-color: var(--bg-surface-hover);
+  border-color: var(--border-color);
+  color: var(--text-secondary);
+}
