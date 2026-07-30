@@ -9,8 +9,7 @@ import express from 'express';
 import { Router } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
-import { logger } from './logger.js';
+import pino from 'pino';
 import pinoHttp from 'pino-http';
 import * as Sentry from '@sentry/node';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
@@ -21,16 +20,13 @@ import swaggerUi from 'swagger-ui-express';
 import { swaggerSpec } from './docs.js';
 import yoga from './graphql/index.js';
 import { cacheGet, cacheSet, cacheDel } from './cache.js';
-import multer from 'multer';
-import { uploadToIPFS, getIPFSFileUrl, unpinFromIPFS } from './ipfs.js';
-import { wsManager } from './websocket.js';
-import { ApolloServer } from '@apollo/server';
-import { expressMiddleware } from '@apollo/server/express4';
-import { typeDefs, createResolvers } from './graphql.js';
-import { initializeGraphQLSubscriptions } from './graphql-ws-adapter.js';
-import { withCdnAssetUrls } from './cdn.js';
-import { createBatchHandler } from './src/middleware/batchHandler.js';
-import { createValidationMiddleware } from './src/middleware/validate.js';
+import { RateLimiterService } from './src/services/rateLimiterService.js';
+import { AnomalyDetector } from './src/services/anomalyDetector.js';
+import { GeoLimiter } from './src/services/geoLimiter.js';
+import { RateLimitAnalytics } from './src/services/rateLimitAnalytics.js';
+import { BillingService } from './src/services/billingService.js';
+import { createRateLimiter } from './src/middleware/rateLimiter.js';
+import { createRateLimitAdminRoutes } from './src/routes/rateLimitAdmin.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // multer memoryStorage keeps the file in memory as a Buffer (req.file.buffer).
@@ -392,55 +388,56 @@ app.use(pinoHttp({
   genReqId: req => req.requestId,
 }));
 
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 200,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many requests, please try again later' },
-});
-app.use('/api/', apiLimiter);
+// ── Rate Limiting Services ─────────────────────────────────────────────────────
+const rateLimitAnalytics = new RateLimitAnalytics({ logger });
+const anomalyDetector = new AnomalyDetector({ logger });
+const geoLimiter = new GeoLimiter({ logger });
+const billingService = new BillingService({ logger });
 
-const writeLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: process.env.NODE_ENV === 'test' ? 1000 : 20,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many write requests, please try again later' },
+const rateLimiterService = new RateLimiterService({
+  logger,
+  analytics: rateLimitAnalytics,
+  anomalyDetector,
+  geoLimiter,
+  billingService,
 });
 
-// ── Prometheus Metrics ─────────────────────────────────────────────────────────
-import prometheus from 'express-prom-bundle';
+// Configure default admin API key with enterprise tier
+const adminApiKey = process.env.ADMIN_API_KEY || 'dev-key-change-in-production';
+rateLimiterService.configureApiKey(adminApiKey, 'enterprise', {
+  email: process.env.ADMIN_EMAIL,
+});
 
-const metricsMiddleware = prometheus({
-  includeMethod: true,
-  includePath: true,
-  includeStatusCode: true,
-  includeUp: true,
-  customLabels: { app: 'rwa-backend' },
-  promClient: {
-    collectDefaultMetrics: { timeout: 5000 },
+const rateLimiter = createRateLimiter(rateLimiterService, {
+  onBlocked: (req, res, result) => {
+    const body = { error: 'Rate limit exceeded' };
+    if (result.reason) body.reason = result.reason;
+    if (result.upgradePrompt) body.upgrade = result.upgradePrompt;
+    req.log?.warn({ reason: result.reason, apiKey: req.headers['x-api-key']?.slice(0, 8) }, 'Request rate limited');
+    return res.status(result.status || 429).json(body);
   },
 });
 
-app.use(metricsMiddleware);
-
-app.get('/metrics', async (_req, res) => {
-  res.setHeader('Content-Type', metricsMiddleware.promClient.register.contentType);
-  res.send(await metricsMiddleware.promClient.register.metrics());
+// Apply rate limiter to all API routes (skip admin routes which have their own auth)
+app.use('/api/', (req, res, next) => {
+  if (req.path.startsWith('/admin/rate-limits')) return next();
+  rateLimiter(req, res, next);
 });
 
-// ── API Documentation ──────────────────────────────────────────────────────────
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
-  customSiteTitle: 'RWA Marketplace API Docs',
-}));
-
-// ── GraphQL Endpoint ───────────────────────────────────────────────────
-app.use('/api/graphql', yoga);
-
-app.get('/api-docs.json', (_req, res) => {
-  res.json(swaggerSpec);
-});
+// Write limiter for admin write operations (POST/DELETE)
+const writeLimiter = async (req, res, next) => {
+  const apiKey = req.headers['x-api-key'] || req.query.api_key;
+  if (!apiKey) return next();
+  const result = await rateLimiterService.checkRateLimit(apiKey, {
+    ip: req.ip,
+    path: req.path,
+    method: req.method,
+  });
+  if (!result.allowed) {
+    return res.status(429).json({ error: 'Too many write requests', reason: result.reason });
+  }
+  next();
+};
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
@@ -449,80 +446,14 @@ app.get('/api/admin/verify', adminAuth, (_req, res) => {
   res.json({ ok: true });
 });
 
-/**
- * @openapi
- * /api/admin/consistency:
- *   get:
- *     tags: [Admin]
- *     summary: Run manual data consistency check
- *     description: |
- *       Triggers an on-demand consistency check across all RWA assets,
- *       comparing cache, database, and blockchain state.
- *       Requires admin API key.
- *     security:
- *       - ApiKeyAuth: []
- *     responses:
- *       200:
- *         description: Consistency check result
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 summary:
- *                   type: object
- *                   description: Aggregated consistency summary
- *                 reports:
- *                   type: array
- *                   description: Per-contract consistency reports
- *       401:
- *         description: Unauthorized
- */
-app.get('/api/admin/consistency', adminAuth, async (_req, res) => {
-  try {
-    const result = await runConsistencyCheck({ loadDataFn: loadData, cacheFn: cacheGet });
-    res.json(result);
-  } catch (err) {
-    logger.error({ err }, 'Consistency check endpoint error');
-    res.status(500).json({ error: 'Consistency check failed', details: err.message });
-  }
+// Rate limit admin routes (mounted before the rate limiter that skips them)
+const rateLimitAdminRoutes = createRateLimitAdminRoutes(rateLimiterService, adminAuth, {
+  analytics: rateLimitAnalytics,
+  anomalyDetector,
+  geoLimiter,
+  billingService,
 });
-
-/**
- * @openapi
- * /api/admin/consistency/status:
- *   get:
- *     tags: [Admin]
- *     summary: Get consistency check scheduler status
- *     description: Returns the current state of the periodic consistency check scheduler.
- *     security:
- *       - ApiKeyAuth: []
- *     responses:
- *       200:
- *         description: Scheduler status
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 enabled:
- *                   type: boolean
- *                 running:
- *                   type: boolean
- *                 intervalMinutes:
- *                   type: number
- *                 autoRepairEnabled:
- *                   type: boolean
- *       401:
- *         description: Unauthorized
- */
-app.get('/api/admin/consistency/status', adminAuth, (_req, res) => {
-  const status = getSchedulerStatus();
-  res.json(status);
-});
-
-// ── v1 Router ─────────────────────────────────────────────────────────────────
-const v1 = Router();
+app.use('/api/admin/rate-limits', rateLimitAdminRoutes);
 
 app.get('/health', async (_req, res) => {
   const deploymentColor = process.env.DEPLOYMENT_COLOR || 'local';
@@ -1696,7 +1627,7 @@ app.use((err, req, res, _next) => {
   res.status(500).json({ error: 'Internal server error', requestId: req.requestId });
 });
 
-export { app };
+export { app, rateLimiterService, rateLimitAnalytics, anomalyDetector, geoLimiter, billingService };
 
 /**
  * Initialize Apollo GraphQL Server
@@ -1766,22 +1697,14 @@ async function initializeApolloServer(expressApp, httpServer) {
 }
 
 if (process.env.NODE_ENV !== 'test') {
-  import('http').then(({ createServer }) => {
-    const server = createServer(app);
-    
-    // Initialize WebSocket server for REST events
-    wsManager.initialize(server);
-    logger.info('WebSocket server initialized');
-    
-    // Initialize Apollo GraphQL Server with subscriptions
-    initializeApolloServer(app, server).catch(err => {
-      logger.error({ error: err.message }, 'Failed to start Apollo Server');
-    });
-    
-    import('./cache.js').then(({ initClient }) => initClient());
-    
-    server.listen(PORT, () => {
-      logger.info({ port: PORT }, 'RWA Off-chain Metadata Backend started with WebSocket, GraphQL & Subscriptions support');
-    });
+  import('./cache.js').then(({ initClient }) => initClient());
+  app.listen(PORT, () => {
+    logger.info({
+      port: PORT,
+      rateLimiterTiers: Object.keys(rateLimiterService.getAvailableTiers()).length,
+      anomalyDetection: anomalyDetector._enabled,
+      geoLimiting: geoLimiter.enabled,
+      billing: billingService.enabled,
+    }, 'RWA Off-chain Metadata Backend started');
   });
 }
