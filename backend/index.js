@@ -31,6 +31,7 @@ import { applyCursorPagination, CursorError, paginationErrorHandler, SORT_FIELDS
 import { parsePaginationParams } from './src/middleware/cursorPagination.js';
 import swaggerUi from 'swagger-ui-express';
 import { generateOpenapiSpec } from './src/services/openapiService.js';
+import { getDatabase } from './src/services/database.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // multer memoryStorage keeps the file in memory as a Buffer (req.file.buffer).
@@ -1773,5 +1774,18 @@ if (process.env.NODE_ENV !== 'test') {
       geoLimiting: geoLimiter.enabled,
       billing: billingService.enabled,
     }, 'RWA Off-chain Metadata Backend started');
+
+    // Cron job to refresh materialized view (PostgreSQL only)
+    setInterval(async () => {
+      try {
+        const db = getDatabase();
+        if (db && db.client.config.client === 'pg') {
+          await db.raw('REFRESH MATERIALIZED VIEW CONCURRENTLY mv_historical_vault_metrics');
+          logger.info('Materialized view mv_historical_vault_metrics refreshed in background');
+        }
+      } catch (error) {
+        logger.error({ error: error.message }, 'Failed to refresh materialized view');
+      }
+    }, 60 * 60 * 1000); // 1 hour
   });
 }
