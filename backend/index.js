@@ -464,38 +464,42 @@ app.get('/api-docs.yaml', (_req, res) => {
   res.type('text/yaml').send(openapiSpec ? 'To generate YAML, use the JSON endpoint or request with Accept: text/yaml' : '');
 });
 
-// ── Prometheus Metrics ─────────────────────────────────────────────────────────
-import prometheus from 'express-prom-bundle';
+// Configure default admin API key with enterprise tier
+const adminApiKey = process.env.ADMIN_API_KEY || 'dev-key-change-in-production';
+rateLimiterService.configureApiKey(adminApiKey, 'enterprise', {
+  email: process.env.ADMIN_EMAIL,
+});
 
-const metricsMiddleware = prometheus({
-  includeMethod: true,
-  includePath: true,
-  includeStatusCode: true,
-  includeUp: true,
-  customLabels: { app: 'rwa-backend' },
-  promClient: {
-    collectDefaultMetrics: { timeout: 5000 },
+const rateLimiter = createRateLimiter(rateLimiterService, {
+  onBlocked: (req, res, result) => {
+    const body = { error: 'Rate limit exceeded' };
+    if (result.reason) body.reason = result.reason;
+    if (result.upgradePrompt) body.upgrade = result.upgradePrompt;
+    req.log?.warn({ reason: result.reason, apiKey: req.headers['x-api-key']?.slice(0, 8) }, 'Request rate limited');
+    return res.status(result.status || 429).json(body);
   },
 });
 
-app.use(metricsMiddleware);
-
-app.get('/metrics', async (_req, res) => {
-  res.setHeader('Content-Type', metricsMiddleware.promClient.register.contentType);
-  res.send(await metricsMiddleware.promClient.register.metrics());
+// Apply rate limiter to all API routes (skip admin routes which have their own auth)
+app.use('/api/', (req, res, next) => {
+  if (req.path.startsWith('/admin/rate-limits')) return next();
+  rateLimiter(req, res, next);
 });
 
-// ── API Documentation ──────────────────────────────────────────────────────────
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
-  customSiteTitle: 'RWA Marketplace API Docs',
-}));
-
-// ── GraphQL Endpoint ───────────────────────────────────────────────────
-app.use('/api/graphql', yoga);
-
-app.get('/api-docs.json', (_req, res) => {
-  res.json(swaggerSpec);
-});
+// Write limiter for admin write operations (POST/DELETE)
+const writeLimiter = async (req, res, next) => {
+  const apiKey = req.headers['x-api-key'] || req.query.api_key;
+  if (!apiKey) return next();
+  const result = await rateLimiterService.checkRateLimit(apiKey, {
+    ip: req.ip,
+    path: req.path,
+    method: req.method,
+  });
+  if (!result.allowed) {
+    return res.status(429).json({ error: 'Too many write requests', reason: result.reason });
+  }
+  next();
+};
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
@@ -526,6 +530,7 @@ app.get('/api-docs.json', (_req, res) => {
  *             example:
  *               error: 'Unauthorized: invalid or missing API key'
  */
+// Admin API key verification endpoint
 app.get('/api/admin/verify', adminAuth, (_req, res) => {
   res.json({ ok: true });
 });
@@ -623,6 +628,69 @@ app.get('/health', async (_req, res) => {
  *         schema:
  *           type: string
  *         description: Cursor for backward pagination (received from previous response's prevCursor)
+ *           format: date-time
+ *         description: Filter assets created/updated on or before this ISO 8601 date
+ *     responses:
+ *       200:
+ *         description: Exported data file
+ *       400:
+ *         description: Invalid query parameters
+ *       401:
+ *         description: Unauthorized
+ */
+v1.get('/rwa/export', adminAuth, (req, res) => {
+  const { format = 'json', from, to } = req.query;
+
+  if (!['json', 'csv'].includes(format)) {
+    return res.status(400).json({ error: 'format must be "json" or "csv"' });
+  }
+
+  const fromDate = from ? new Date(from) : null;
+  const toDate = to ? new Date(to) : null;
+
+  if (from && isNaN(fromDate)) return res.status(400).json({ error: 'Invalid "from" date' });
+  if (to && isNaN(toDate)) return res.status(400).json({ error: 'Invalid "to" date' });
+
+  const data = loadData();
+  let assets = Object.entries(data).map(([contractId, meta]) => withCdnAssetUrls({ contractId, ...meta }));
+
+  if (fromDate) assets = assets.filter(a => new Date(a.updatedAt || a.createdAt) >= fromDate);
+  if (toDate)   assets = assets.filter(a => new Date(a.updatedAt || a.createdAt) <= toDate);
+
+  const filename = `rwa-export-${Date.now()}.${format}`;
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+  if (format === 'csv') {
+    const cols = ['contractId', 'id', 'title', 'location', 'description', 'assetType', 'imageUrl', 'totalValuation', 'createdAt', 'updatedAt'];
+    const escape = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const rows = [cols.join(','), ...assets.map(a => cols.map(c => escape(a[c])).join(','))];
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    return res.send(rows.join('\r\n'));
+  }
+
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.json(assets);
+});
+
+// GET /api/rwa?after=<cursor>&before=<cursor>&limit=20&sort=createdAt&order=desc&assetType=real_estate&search=coffee
+app.get('/api/rwa', (req, res, next) => {
+  try {
+    const data = loadData();
+    const assets = Object.entries(data).map(([contractId, meta]) => ({ contractId, ...meta }));
+/**
+ * @openapi
+ * /api/v1/rwa:
+ *   get:
+ *     tags: [Assets]
+ *     summary: List all asset metadata
+ *     description: Returns a paginated, filterable list of all RWA assets.
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *         description: Page number
  *       - in: query
  *         name: limit
  *         schema:
@@ -638,6 +706,77 @@ app.get('/health', async (_req, res) => {
  *           enum: [createdAt, title, contractId, assetType, updatedAt, totalValuation]
  *           default: createdAt
  *         description: Field to sort by
+ *         description: Full-text search on title and description
+ *         example: luxury
+ *     responses:
+ *       200:
+ *         description: Paginated list of assets
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/PaginatedAssets'
+ */
+v1.get('/rwa', (req, res) => {
+  const data = loadData();
+  let assets = Object.entries(data)
+    .filter(([, meta]) => isApproved(meta))
+    .map(([contractId, meta]) => withCdnAssetUrls({ contractId, ...meta }));
+
+  // Filter: assetType (case-insensitive) — faceted filter
+  const { assetType, location, search, page, limit } = req.query;
+  if (assetType) {
+    const lower = assetType.toLowerCase();
+    assets = assets.filter(a => a.assetType?.toLowerCase() === lower);
+  }
+
+  // Filter: location (faceted filter)
+  if (location) {
+    const lower = location.toLowerCase();
+    assets = assets.filter(a => a.location?.toLowerCase().includes(lower));
+  }
+
+  // Filter: full-text search with relevance scoring on title, description, location
+  if (search) {
+    const approvedData = Object.fromEntries(
+      Object.entries(data).filter(([, m]) => isApproved(m))
+    );
+    // Rebuild index scoped to approved assets for accurate IDF
+    buildSearchIndex(approvedData);
+    const ranked = scoreSearch(search, approvedData);
+    const rankedIds = new Set(ranked.map(r => r.contractId));
+    // Preserve relevance order
+    const byId = Object.fromEntries(assets.map(a => [a.contractId, a]));
+    assets = ranked
+      .filter(r => rankedIds.has(r.contractId) && byId[r.contractId])
+      .map(r => ({ ...byId[r.contractId], _score: r.score }));
+  }
+
+  const total = assets.length;
+  const pageNum = Math.max(1, parseInt(page) || 1);
+  const pageSize = Math.min(100, Math.max(1, parseInt(limit) || 20));
+  const totalPages = Math.ceil(total / pageSize) || 1;
+  const offset = (pageNum - 1) * pageSize;
+
+    const paginationParams = parsePaginationParams(req);
+    const result = applyCursorPagination(assets, paginationParams);
+
+    res.json(result);
+
+    // Cache the asset list result (fire-and-forget)
+    cacheSet('rwa:all', result).catch(() => {});
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @openapi
+ * /api/v1/rwa/search:
+ *   get:
+ *     tags: [Assets]
+ *     summary: Full-text search with relevance scoring
+ *     description: Search assets by query across title, description, and location with TF-IDF relevance scoring and faceted filters.
+ *     parameters:
  *       - in: query
  *         name: order
  *         schema:
@@ -913,6 +1052,633 @@ app.delete('/api/rwa/:contractId', adminAuth, writeLimiter, async (req, res) => 
 
 // Cursor pagination error handler
 app.use(paginationErrorHandler);
+/**
+ * @openapi
+ * /api/v1/rwa/{contractId}:
+ *   patch:
+ *     tags: [Assets]
+ *     summary: Partially update asset metadata
+ *     description: Update only the provided fields. Requires admin API key via `x-api-key` header.
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: contractId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Soroban contract ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               title:
+ *                 type: string
+ *               location:
+ *                 type: string
+ *               description:
+ *                 type: string
+ *               assetType:
+ *                 type: string
+ *               imageUrl:
+ *                 type: string
+ *               totalValuation:
+ *                 type: string
+ *               documents:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *             minProperties: 1
+ *     responses:
+ *       200:
+ *         description: Asset updated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Asset'
+ *       400:
+ *         description: Validation error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       404:
+ *         description: Asset not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+v1.patch('/rwa/:contractId', adminAuth, writeLimiter, async (req, res) => {
+  const { contractId } = req.params;
+  const patch = req.body;
+
+  if (!Object.keys(patch).length) {
+    return res.status(400).json({ error: 'Request body must contain at least one field to update' });
+  }
+
+  const data = loadData();
+  if (!data[contractId]) return res.status(404).json({ error: 'Asset metadata not found' });
+
+  // Merge only provided fields
+  const allowedFields = ['title', 'location', 'description', 'assetType', 'imageUrl', 'totalValuation', 'documents'];
+  allowedFields.forEach(field => {
+    if (field in patch && patch[field] !== undefined) {
+      data[contractId][field] = patch[field];
+    }
+  });
+
+  data[contractId].updatedAt = new Date().toISOString();
+  saveData(data);
+
+  // Invalidate caches and sync search index (fire-and-forget)
+  cacheDel('rwa:all', cacheKey(contractId)).catch(() => {});
+  syncSearchIndex();
+  fireWebhooks(WEBHOOK_EVENTS.UPDATED, { contractId, ...data[contractId] }).catch(() => {});
+
+  req.log?.info({ contractId, fields: Object.keys(patch) }, 'Asset partially updated');
+  res.json(withCdnAssetUrls({ contractId, ...data[contractId] }));
+});
+
+/**
+ * backend/index.js — backward-compatibility shim.
+ *
+ * The application has been split into the src/ directory (issue #122).
+ * This file re-exports the public API so that existing tests and any
+ * external tooling that imports from `index.js` continues to work unchanged.
+ *
+ * New code should import directly from the relevant src/ module.
+ */
+v1.post('/rwa/:contractId/documents', adminAuth, writeLimiter, upload.single('document'), async (req, res) => {
+  const { contractId } = req.params;
+
+  // multer puts the uploaded file on req.file
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded. Send a multipart/form-data request with field name "document".' });
+  }
+
+  const data = loadData();
+  if (!data[contractId]) {
+    return res.status(404).json({ error: 'Asset metadata not found' });
+  }
+
+  try {
+    // Upload the buffer directly to Pinata — no disk writes
+    const { cid, url, name } = await uploadToIPFS(
+      req.file.buffer,
+      req.file.originalname,
+      data[contractId].title || contractId
+    );
+
+    // Store the document entry in the asset's documents array
+    const docEntry = {
+      cid,
+      url,
+      name,
+      mimeType: req.file.mimetype,
+      size: req.file.size,
+      uploadedAt: new Date().toISOString(),
+    };
+
+    if (!Array.isArray(data[contractId].documents)) {
+      data[contractId].documents = [];
+    }
+    data[contractId].documents.push(docEntry);
+    data[contractId].updatedAt = new Date().toISOString();
+    saveData(data);
+
+    // Bust the cache so the updated asset is returned immediately
+    cacheDel('rwa:all', cacheKey(contractId)).catch(() => {});
+
+    req.log?.info({ contractId, cid }, 'Document uploaded to IPFS');
+    res.json({ contractId, document: docEntry, documents: data[contractId].documents });
+
+  } catch (err) {
+    req.log?.error({ err, contractId }, 'IPFS upload failed');
+    res.status(502).json({ error: `IPFS upload failed: ${err.message}` });
+  }
+});
+
+/**
+ * @openapi
+ * /api/v1/rwa/{contractId}/documents/{cid}:
+ *   get:
+ *     tags: [Assets]
+ *     summary: Retrieve a document from IPFS by CID
+ *     description: Redirects to the IPFS gateway URL for the given CID.
+ *     parameters:
+ *       - in: path
+ *         name: contractId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: path
+ *         name: cid
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       302:
+ *         description: Redirect to IPFS gateway URL
+ *       404:
+ *         description: Asset or document not found
+ */
+v1.get('/rwa/:contractId/documents/:cid', async (req, res) => {
+  const { contractId, cid } = req.params;
+
+  const data = loadData();
+  const asset = data[contractId];
+  if (!asset) {
+    return res.status(404).json({ error: 'Asset metadata not found' });
+  }
+
+  // Verify this CID actually belongs to this asset before redirecting
+  const doc = asset.documents?.find(d => d.cid === cid);
+  if (!doc) {
+    return res.status(404).json({ error: 'Document not found on this asset' });
+  }
+
+  // Redirect to the IPFS gateway — the file is served from IPFS, not our server
+  const url = getIPFSFileUrl(cid);
+  req.log?.info({ contractId, cid, url }, 'Redirecting to IPFS document');
+  res.redirect(302, url);
+});
+
+/**
+ * @openapi
+ * /api/v1/rwa/{contractId}/approve:
+ *   post:
+ *     tags: [Assets]
+ *     summary: Approve a pending asset
+ *     description: Sets asset status to "approved". Requires admin API key.
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: contractId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Soroban contract ID
+ *     responses:
+ *       200:
+ *         description: Asset approved
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: Asset not found
+ */
+v1.post('/rwa/:contractId/approve', adminAuth, writeLimiter, async (req, res) => {
+  const { contractId } = req.params;
+  const data = loadData();
+  if (!data[contractId]) return res.status(404).json({ error: 'Asset metadata not found' });
+
+  data[contractId].status = ASSET_STATUS.APPROVED;
+  data[contractId].reviewedAt = new Date().toISOString();
+  data[contractId].reviewedBy = req.headers['x-reviewer'] || 'admin';
+  data[contractId].updatedAt = new Date().toISOString();
+  saveData(data);
+
+  cacheDel('rwa:all', cacheKey(contractId)).catch(() => {});
+  fireWebhooks(WEBHOOK_EVENTS.APPROVED, { contractId, ...data[contractId] }).catch(() => {});
+  req.log?.info({ contractId }, 'Asset approved');
+  res.json(withCdnAssetUrls({ contractId, ...data[contractId] }));
+});
+
+/**
+ * @openapi
+ * /api/v1/rwa/{contractId}/reject:
+ *   post:
+ *     tags: [Assets]
+ *     summary: Reject a pending asset
+ *     description: Sets asset status to "rejected". Requires admin API key.
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: contractId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Soroban contract ID
+ *     responses:
+ *       200:
+ *         description: Asset rejected
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: Asset not found
+ */
+v1.post('/rwa/:contractId/reject', adminAuth, writeLimiter, async (req, res) => {
+  const { contractId } = req.params;
+  const data = loadData();
+  if (!data[contractId]) return res.status(404).json({ error: 'Asset metadata not found' });
+
+  data[contractId].status = ASSET_STATUS.REJECTED;
+  data[contractId].reviewedAt = new Date().toISOString();
+  data[contractId].reviewedBy = req.headers['x-reviewer'] || 'admin';
+  data[contractId].updatedAt = new Date().toISOString();
+  saveData(data);
+
+  cacheDel('rwa:all', cacheKey(contractId)).catch(() => {});
+  fireWebhooks(WEBHOOK_EVENTS.REJECTED, { contractId, ...data[contractId] }).catch(() => {});
+  req.log?.info({ contractId }, 'Asset rejected');
+  res.json(withCdnAssetUrls({ contractId, ...data[contractId] }));
+});
+
+// ── News / Updates ────────────────────────────────────────────────────────────
+const NEWS_STORAGE = [
+  {
+    id: '1',
+    title: 'Platform Launch',
+    summary: 'The RWA Marketplace is now live on Stellar Testnet. Start exploring tokenized real-world assets.',
+    date: new Date().toISOString(),
+    link: 'https://github.com/Trust-Analysis/Tokenized-Fractional-',
+  },
+  {
+    id: '2',
+    title: 'New Asset Listings',
+    summary: 'Multiple new real estate and asset-backed tokens are now available for purchase in the marketplace.',
+    date: new Date(Date.now() - 86400000 * 2).toISOString(),
+    link: '#',
+  },
+];
+
+/**
+ * @openapi
+ * /api/v1/news:
+ *   get:
+ *     tags: [News]
+ *     summary: List marketplace news and updates
+ *     description: Returns a list of announcements, new listings, and platform updates.
+ *     responses:
+ *       200:
+ *         description: Array of news items
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   id:
+ *                     type: string
+ *                   title:
+ *                     type: string
+ *                   summary:
+ *                     type: string
+ *                   date:
+ *                     type: string
+ *                     format: date-time
+ *                   link:
+ *                     type: string
+ */
+v1.get('/news', (_req, res) => {
+  res.json(NEWS_STORAGE);
+});
+
+// ── Webhook CRUD routes (admin only) ──────────────────────────────────────────
+/**
+ * @openapi
+ * /api/v1/webhooks:
+ *   get:
+ *     tags: [Webhooks]
+ *     summary: List all webhooks (admin only)
+ *     security:
+ *       - ApiKeyAuth: []
+ *     responses:
+ *       200:
+ *         description: List of registered webhooks
+ *       401:
+ *         description: Unauthorized
+ */
+v1.get('/webhooks', adminAuth, (req, res) => {
+  const webhooks = loadWebhooks();
+  res.json(Object.values(webhooks));
+});
+
+/**
+ * @openapi
+ * /api/v1/webhooks:
+ *   post:
+ *     tags: [Webhooks]
+ *     summary: Register a new webhook (admin only)
+ *     security:
+ *       - ApiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/WebhookInput'
+ *     responses:
+ *       201:
+ *         description: Webhook created
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Unauthorized
+ */
+v1.post('/webhooks', adminAuth, writeLimiter, (req, res) => {
+  const error = validateWebhookBody(req.body);
+  if (error) return res.status(400).json({ error });
+
+  const id = generateWebhookId();
+  const now = new Date().toISOString();
+  const webhooks = loadWebhooks();
+  webhooks[id] = {
+    id,
+    url: req.body.url,
+    events: req.body.events,
+    secret: req.body.secret || '',
+    active: req.body.active !== false,
+    createdAt: now,
+    updatedAt: now,
+    lastSuccessAt: null,
+    lastFailureAt: null,
+    failureCount: 0,
+  };
+  saveWebhooks(webhooks);
+
+  req.log?.info({ webhookId: id, url: req.body.url }, 'Webhook created');
+  res.status(201).json(webhooks[id]);
+});
+
+/**
+ * @openapi
+ * /api/v1/webhooks/{id}:
+ *   get:
+ *     tags: [Webhooks]
+ *     summary: Get a webhook by ID (admin only)
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Webhook details
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: Webhook not found
+ */
+v1.get('/webhooks/:id', adminAuth, (req, res) => {
+  const webhooks = loadWebhooks();
+  const wh = webhooks[req.params.id];
+  if (!wh) return res.status(404).json({ error: 'Webhook not found' });
+  res.json(wh);
+});
+
+/**
+ * @openapi
+ * /api/v1/webhooks/{id}:
+ *   patch:
+ *     tags: [Webhooks]
+ *     summary: Update a webhook (admin only)
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/WebhookInput'
+ *     responses:
+ *       200:
+ *         description: Webhook updated
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: Webhook not found
+ */
+v1.patch('/webhooks/:id', adminAuth, writeLimiter, (req, res) => {
+  const webhooks = loadWebhooks();
+  const wh = webhooks[req.params.id];
+  if (!wh) return res.status(404).json({ error: 'Webhook not found' });
+
+  const allowed = ['url', 'events', 'secret', 'active'];
+  allowed.forEach(f => {
+    if (f in req.body && req.body[f] !== undefined) {
+      wh[f] = req.body[f];
+    }
+  });
+
+  wh.updatedAt = new Date().toISOString();
+  saveWebhooks(webhooks);
+
+  req.log?.info({ webhookId: req.params.id }, 'Webhook updated');
+  res.json(wh);
+});
+
+/**
+ * @openapi
+ * /api/v1/webhooks/{id}:
+ *   delete:
+ *     tags: [Webhooks]
+ *     summary: Delete a webhook (admin only)
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Webhook deleted
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: Webhook not found
+ */
+v1.delete('/webhooks/:id', adminAuth, writeLimiter, (req, res) => {
+  const webhooks = loadWebhooks();
+  if (!webhooks[req.params.id]) return res.status(404).json({ error: 'Webhook not found' });
+
+  delete webhooks[req.params.id];
+  saveWebhooks(webhooks);
+
+  req.log?.info({ webhookId: req.params.id }, 'Webhook deleted');
+  res.json({ message: 'Webhook deleted', id: req.params.id });
+});
+
+// ── WebSocket Event Broadcasting Routes ────────────────────────────────────────
+/**
+ * POST /api/v1/notify/share-purchased
+ * Broadcasts share purchase events to all connected WebSocket clients
+ * Internal use: Called by frontend after successful transaction confirmation
+ */
+v1.post('/notify/share-purchased', (req, res) => {
+  const { contractId, buyerAddress, sharesToBuy, totalCost } = req.body;
+
+  if (!contractId || !buyerAddress || sharesToBuy === undefined || totalCost === undefined) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  wsManager.broadcastSharePurchase(contractId, buyerAddress, sharesToBuy, totalCost);
+
+  req.log?.info(
+    { contractId, buyerAddress, sharesToBuy, totalCost },
+    'Share purchase event broadcasted'
+  );
+
+  res.json({ ok: true, message: 'Event broadcasted' });
+});
+
+/**
+ * POST /api/v1/notify/price-updated
+ * Broadcasts price update events to all connected WebSocket clients
+ * Internal use: Called by admin when updating price
+ */
+v1.post('/notify/price-updated', adminAuth, (req, res) => {
+  const { contractId, newPrice } = req.body;
+
+  if (!contractId || newPrice === undefined) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  wsManager.broadcastPriceUpdate(contractId, newPrice);
+
+  req.log?.info({ contractId, newPrice }, 'Price update event broadcasted');
+
+  res.json({ ok: true, message: 'Event broadcasted' });
+});
+
+/**
+ * POST /api/v1/notify/availability-changed
+ * Broadcasts availability change events to all connected WebSocket clients
+ * Internal use: Called when available shares change
+ */
+v1.post('/notify/availability-changed', adminAuth, (req, res) => {
+  const { contractId, availableShares } = req.body;
+
+  if (!contractId || availableShares === undefined) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  wsManager.broadcastAvailabilityChange(contractId, availableShares);
+
+  req.log?.info({ contractId, availableShares }, 'Availability change event broadcasted');
+
+  res.json({ ok: true, message: 'Event broadcasted' });
+});
+
+/**
+ * POST /api/v1/notify/asset-updated
+ * Broadcasts asset update events to all connected WebSocket clients
+ * Internal use: Called when asset metadata is updated
+ */
+v1.post('/notify/asset-updated', adminAuth, (req, res) => {
+  const { contractId, asset } = req.body;
+
+  if (!contractId || !asset) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  wsManager.broadcastAssetUpdate(contractId, asset);
+
+  req.log?.info({ contractId }, 'Asset update event broadcasted');
+
+  res.json({ ok: true, message: 'Event broadcasted' });
+});
+
+/**
+ * POST /api/v1/notify/marketplace-status
+ * Broadcasts marketplace pause/unpause events to all connected WebSocket clients
+ * Internal use: Called by admin when pausing/unpausing marketplace
+ */
+v1.post('/notify/marketplace-status', adminAuth, (req, res) => {
+  const { isPaused } = req.body;
+
+  if (isPaused === undefined) {
+    return res.status(400).json({ error: 'Missing isPaused field' });
+  }
+
+  wsManager.broadcastMarketplaceStatus(isPaused);
+
+  req.log?.info({ isPaused }, 'Marketplace status event broadcasted');
+
+  res.json({ ok: true, message: 'Event broadcasted' });
+});
+
+/**
+ * GET /api/v1/ws/stats
+ * Returns WebSocket connection statistics
+ */
+v1.get('/ws/stats', (req, res) => {
+  res.json(wsManager.getStats());
+});
+
+// Mount versioned router and backward-compatible aliases
+app.use('/api/v1', v1);
+app.use('/api', v1); // legacy /api/rwa aliased to /api/v1/rwa
+
+// ── Batch API endpoint — multiple operations in a single request (#256) ──────
+const batchHandler = createBatchHandler(app, { logger });
+app.post('/api/batch', batchHandler);
+app.post('/api/v1/batch', batchHandler);
 
 app.use((_req, res) => {
   res.status(404).json({ error: 'Not found', requestId: _req.requestId });

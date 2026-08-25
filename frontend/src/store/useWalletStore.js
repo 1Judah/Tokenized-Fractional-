@@ -8,9 +8,45 @@ const FALLBACK_PROVIDER = {
   rdns: 'app.freighter',
 };
 
+/**
+ * Supported wallet providers.
+ * Only 'freighter' is active; others are placeholders for future integration.
+ */
+export const WALLET_PROVIDERS = [
+  {
+    id: "freighter",
+    name: "Freighter",
+    description: "Stellar's official browser extension wallet",
+    status: "available", // 'available' | 'coming_soon'
+    downloadUrl: "https://freighter.app",
+  },
+  {
+    id: "lobstr",
+    name: "Lobstr",
+    description: "Mobile-first Stellar wallet with WalletConnect support",
+    status: "coming_soon",
+    downloadUrl: "https://lobstr.co",
+  },
+  {
+    id: "xbull",
+    name: "xBull",
+    description: "Feature-rich Stellar wallet for power users",
+    status: "coming_soon",
+    downloadUrl: "https://xbull.app",
+  },
+  {
+    id: "albedo",
+    name: "Albedo",
+    description: "Browser-based signer — no extension required",
+    status: "coming_soon",
+    downloadUrl: "https://albedo.link",
+  },
+];
+
 export const useWalletStore = create(
   persist(
     (set, get) => ({
+      // ── Existing fields ────────────────────────────────────────────────────
       publicKey: null,
       isConnecting: false,
       walletError: null,
@@ -18,6 +54,23 @@ export const useWalletStore = create(
       activeProvider: null,
       availableProviders: [],
 
+      // ── New fields ─────────────────────────────────────────────────────────
+      /** The wallet provider id that is currently active, e.g. 'freighter' */
+      activeWallet: null,
+
+      /** Snapshot of WALLET_PROVIDERS enriched with runtime status at startup */
+      availableWallets: WALLET_PROVIDERS,
+
+      /**
+       * Ordered list of successful connections.
+       * Each entry: { wallet: string, publicKey: string, timestamp: number }
+       */
+      connectionHistory: [],
+
+      /** Number of consecutive failed connection attempts for the active provider */
+      reconnectAttempts: 0,
+
+      // ── Derived ───────────────────────────────────────────────────────────
       isConnected: () => Boolean(get().publicKey),
 
       setAvailableProviders: (providers) => set({ availableProviders: providers }),
@@ -76,6 +129,9 @@ export const useWalletStore = create(
         return null;
       },
 
+      /**
+       * Prompt the user to authorise Freighter then read their public key.
+       */
       connect: async () => {
         set({ isConnecting: true, walletError: null });
         if (import.meta.env.VITE_MOCK_WALLET === 'true') {
@@ -121,6 +177,31 @@ export const useWalletStore = create(
       setWalletError: (msg) => set({ walletError: msg }),
 
       clearWalletError: () => set({ walletError: null }),
+
+      // ── New actions ────────────────────────────────────────────────────────
+
+      /** Manually override the active wallet id (used for future providers) */
+      setActiveWallet: (name) => set({ activeWallet: name }),
+
+      /**
+       * Manually push a connection record into history.
+       * @param {{ wallet: string, publicKey: string, timestamp?: number }} info
+       */
+      recordConnection: (info) => {
+        const entry = {
+          wallet: info.wallet,
+          publicKey: info.publicKey,
+          timestamp: info.timestamp ?? Date.now(),
+        };
+        set((state) => ({
+          connectionHistory: [entry, ...state.connectionHistory].slice(0, 20),
+        }));
+      },
+
+      resetReconnectAttempts: () => set({ reconnectAttempts: 0 }),
+
+      incrementReconnectAttempts: () =>
+        set((state) => ({ reconnectAttempts: state.reconnectAttempts + 1 })),
     }),
     {
       name: 'rwa-wallet-store',

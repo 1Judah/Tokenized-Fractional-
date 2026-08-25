@@ -85,6 +85,19 @@ function LazyFallback() {
   );
 }
 
+// ── Lazy-loaded feature components ────────────────────────────────────────────
+const AssetDetailPage = lazy(() =>
+  import('./components/AssetDetailPage/AssetDetailPage')
+);
+const WalletManager = lazy(() =>
+  import('./components/WalletManager/WalletManager')
+);
+const TransactionHistoryDashboard = lazy(() =>
+  import('./components/TransactionHistoryDashboard/TransactionHistoryDashboard')
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 const CONTRACT_ID = import.meta.env.VITE_CONTRACT_ID || 'C...';
 const NETWORK_PASSPHRASE = import.meta.env.VITE_NETWORK_PASSPHRASE || Networks.TESTNET;
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
@@ -590,6 +603,7 @@ function App() {
 
   return (
     <div className={styles.container}>
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
       <header className={styles.header}>
         <div className={styles.titleArea}>
           <div className={styles.titleRow}>
@@ -622,6 +636,7 @@ function App() {
             </Tooltip>
           </div>
         </div>
+
         <div className={styles.walletArea}>
           <ConnectionStatusIndicator
             status={wsConnected ? 'connected' : 'disconnected'}
@@ -661,9 +676,15 @@ function App() {
             />
           ) : (
             <div className={styles.walletInfo}>
-              <span className={styles.publicKey} title={publicKey}>
-                {publicKey}
-              </span>
+              {/* Clicking public key re-opens WalletManager */}
+              <button
+                className={styles.publicKey}
+                title={`${publicKey} — click to manage wallet`}
+                onClick={() => setWalletManagerOpen(true)}
+                aria-label="Manage wallet connection"
+              >
+                {publicKey.slice(0, 8)}…{publicKey.slice(-6)}
+              </button>
               <Button onClick={disconnectWallet} variant="danger">
                 {t('wallet.disconnect')}
               </Button>
@@ -672,11 +693,11 @@ function App() {
         </div>
       </header>
 
-      {/* Tab Navigation */}
+      {/* ── Tab Navigation ──────────────────────────────────────────────────── */}
       <nav className={styles.tabs}>
         <button
-          className={`${styles.tab} ${view === 'marketplace' ? styles.tabActive : ''}`}
-          onClick={() => setView('marketplace')}
+          className={`${styles.tab} ${view === 'marketplace' || view === 'asset-detail' ? styles.tabActive : ''}`}
+          onClick={() => { setView('marketplace'); setSelectedAsset(null); }}
         >
           {t('nav.marketplace')}
         </button>
@@ -686,6 +707,14 @@ function App() {
         >
           {t('nav.portfolio')}
         </button>
+        {publicKey && (
+          <button
+            className={`${styles.tab} ${view === 'transactions' ? styles.tabActive : ''}`}
+            onClick={() => setView('transactions')}
+          >
+            Transactions
+          </button>
+        )}
         <button
           className={`${styles.tab} ${view === 'admin' ? styles.tabActive : ''}`}
           onClick={() => setView('admin')}
