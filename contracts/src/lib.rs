@@ -689,16 +689,16 @@ impl RwaMarketplace {
         // Register as new holder only on first purchase or if not registered yet
         Self::register_holder(&env, buyer.clone());
 
-        // Mint one share-certificate NFT per share purchased (if NFT contract is configured).
+        // Mint share-certificate NFTs per share purchased (if NFT contract is configured).
+        // Use optimized batch minting for gas efficiency
         if let Some(nft_addr) = env
             .storage()
             .instance()
             .get::<DataKey, Address>(&DataKey::NftContract)
         {
             let nft = NftContractClient::new(&env, &nft_addr);
-            for _ in 0..shares {
-                nft.mint_certificate(&buyer);
-            }
+            // Use batch minting for gas optimization
+            nft.batch_mint_to_single(&buyer, shares);
         }
 
         // Issue #274: Update purchase history after successful purchase
