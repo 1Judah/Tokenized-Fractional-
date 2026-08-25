@@ -186,15 +186,26 @@ export class TransactionService {
    * Get all-time metrics
    */
   async getAllTimeMetrics() {
-    const transactions = await this.db('transactions')
-      .where('status', 'completed');
+    const vaultMetrics = await this.getVaultAggregateMetrics();
 
-    const totalTransactions = transactions.length;
-    const totalVolume = transactions.reduce((sum, t) => sum + parseFloat(t.total_amount), 0);
-    const totalShares = transactions.reduce((sum, t) => sum + parseFloat(t.shares_purchased), 0);
+    let totalTransactions = 0;
+    let totalVolume = 0;
+    let totalShares = 0;
+    let uniqueAssets = 0;
 
-    const uniqueBuyers = new Set(transactions.map(t => t.buyer_address)).size;
-    const uniqueAssets = new Set(transactions.map(t => t.contract_id)).size;
+    for (const v of vaultMetrics) {
+      totalTransactions += Number(v.total_tx_count) || 0;
+      totalVolume += Number(v.total_volume) || 0;
+      totalShares += Number(v.total_shares) || 0;
+      if (v.contract_id) uniqueAssets++;
+    }
+
+    // Exact count of unique buyers across all vaults
+    const buyerResult = await this.db('transactions')
+      .where('status', 'completed')
+      .countDistinct('buyer_address as count')
+      .first();
+    const uniqueBuyers = Number(buyerResult?.count || 0);
 
     return {
       totalTransactions,
@@ -205,6 +216,81 @@ export class TransactionService {
       averageTransactionSize: totalTransactions > 0 ? totalVolume / totalTransactions : 0,
     };
   }
+
+  /**
+   * Get highly optimized aggregate metrics for all fractional vaults using raw SQL CTEs
+   */
+  async getVaultAggregateMetrics() {
+    const isPg = this.db.client.config.client === 'pg';
+    let rawQuery;
+
+    if (isPg) {
+      rawQuery = `
+        WITH live_data AS (
+          SELECT 
+            contract_id,
+            COUNT(id) as live_tx_count,
+            SUM(total_amount) as live_volume,
+            SUM(shares_purchased) as live_shares,
+            COUNT(DISTINCT buyer_address) as live_unique_buyers,
+            MAX(price_per_share) as latest_price
+          FROM transactions
+          WHERE created_at >= NOW() - INTERVAL '24 hours'
+            AND status = 'completed'
+          GROUP BY contract_id
+        )
+        SELECT 
+          COALESCE(l.contract_id, h.contract_id) as contract_id,
+          COALESCE(l.live_tx_count, 0) + COALESCE(h.historical_tx_count, 0) as total_tx_count,
+          COALESCE(l.live_volume, 0) + COALESCE(h.historical_volume, 0) as total_volume,
+          COALESCE(l.live_shares, 0) + COALESCE(h.historical_shares, 0) as total_shares,
+          COALESCE(l.live_unique_buyers, 0) + COALESCE(h.historical_unique_buyers, 0) as approximate_unique_buyers,
+          l.latest_price
+        FROM live_data l
+        FULL OUTER JOIN mv_historical_vault_metrics h ON l.contract_id = h.contract_id
+      `;
+    } else {
+      // SQLite fallback (no FULL OUTER JOIN, using LEFT JOIN and UNION)
+      rawQuery = `
+        WITH live_data AS (
+          SELECT 
+            contract_id,
+            COUNT(id) as live_tx_count,
+            SUM(total_amount) as live_volume,
+            SUM(shares_purchased) as live_shares,
+            COUNT(DISTINCT buyer_address) as live_unique_buyers,
+            MAX(price_per_share) as latest_price
+          FROM transactions
+          WHERE created_at >= datetime('now', '-1 day')
+            AND status = 'completed'
+          GROUP BY contract_id
+        )
+        SELECT 
+          COALESCE(l.contract_id, h.contract_id) as contract_id,
+          COALESCE(l.live_tx_count, 0) + COALESCE(h.historical_tx_count, 0) as total_tx_count,
+          COALESCE(l.live_volume, 0) + COALESCE(h.historical_volume, 0) as total_volume,
+          COALESCE(l.live_shares, 0) + COALESCE(h.historical_shares, 0) as total_shares,
+          COALESCE(l.live_unique_buyers, 0) + COALESCE(h.historical_unique_buyers, 0) as approximate_unique_buyers,
+          l.latest_price
+        FROM live_data l
+        LEFT JOIN mv_historical_vault_metrics h ON l.contract_id = h.contract_id
+        UNION
+        SELECT 
+          COALESCE(l.contract_id, h.contract_id) as contract_id,
+          COALESCE(l.live_tx_count, 0) + COALESCE(h.historical_tx_count, 0) as total_tx_count,
+          COALESCE(l.live_volume, 0) + COALESCE(h.historical_volume, 0) as total_volume,
+          COALESCE(l.live_shares, 0) + COALESCE(h.historical_shares, 0) as total_shares,
+          COALESCE(l.live_unique_buyers, 0) + COALESCE(h.historical_unique_buyers, 0) as approximate_unique_buyers,
+          l.latest_price
+        FROM mv_historical_vault_metrics h
+        LEFT JOIN live_data l ON l.contract_id = h.contract_id
+      `;
+    }
+
+    const result = await this.db.raw(rawQuery);
+    return result.rows || result;
+  }
+
 
   /**
    * Get metrics for a date range

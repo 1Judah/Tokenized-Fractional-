@@ -208,6 +208,25 @@ export const typeDefs = gql`
     timestamp: String!
   }
 
+  # Asset updated event (delta payload)
+  type AssetUpdatedEvent {
+    # The asset being updated
+    contractId: String!
+    
+    # Changed fields (nullable for delta)
+    title: String
+    location: String
+    description: String
+    assetType: String
+    totalShares: Int
+    pricePerShare: Int
+    availableShares: Int
+    isPaused: Boolean
+    documents: [DocumentHash!]
+    createdAt: String
+    updatedAt: String
+  }
+
   # Asset marketplace status change event
   type MarketplaceStatusEvent {
     # The affected asset
@@ -256,7 +275,7 @@ export const typeDefs = gql`
     onAssetListed: RWA!
     
     # Subscribe to asset update events
-    onAssetUpdated(contractId: String): RWA!
+    onAssetUpdated(contractId: String): AssetUpdatedEvent!
     
     # Subscribe to availability changes
     onAvailabilityChanged(contractId: String): AvailabilityChangedEvent!
