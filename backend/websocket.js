@@ -1,10 +1,12 @@
 /**
  * WebSocket Server and Event Manager
  * Handles real-time updates for marketplace events (share purchases, price changes, etc.)
+ * Enhanced with Dead Letter Queue for message reliability and delivery guarantees.
  */
 
 import { WebSocketServer } from 'ws';
 import { logger } from './index.js';
+import { websocketDLQService } from './src/services/websocketDLQService.js';
 
 /**
  * Event types for WebSocket communication
@@ -24,12 +26,14 @@ export const WS_EVENT_TYPES = {
 
 /**
  * WebSocket Manager - Manages connections and broadcasts events
+ * Enhanced with DLQ for message reliability and sequence tracking
  */
 export class WebSocketManager {
   constructor() {
     this.wss = null;
-    this.clients = new Map(); // Map of clientId -> { ws, subscriptions: Set }
+    this.clients = new Map(); // Map of clientId -> { ws, subscriptions: Set, lastSeqId: Map }
     this.subscriptions = new Map(); // Map of topic -> Set of clientIds
+    this.clientLastSeqId = new Map(); // Map of clientId -> Map<channel, lastSeqId>
   }
 
   /**
@@ -46,9 +50,11 @@ export class WebSocketManager {
         ws,
         subscriptions: new Set(),
         clientId,
+        lastSeqId: new Map(), // Track last sequence ID per channel
       };
 
       this.clients.set(clientId, client);
+      this.clientLastSeqId.set(clientId, new Map());
 
       // Send connection confirmation
       this.send(ws, {
@@ -102,6 +108,9 @@ export class WebSocketManager {
         case 'ping':
           this.send(client.ws, { type: 'pong', timestamp: new Date().toISOString() });
           break;
+        case 'request_missing_messages':
+          this.handleMissingMessageRequest(clientId, message);
+          break;
         default:
           logger.warn({ clientId, action: message.action }, 'Unknown action');
       }
@@ -128,6 +137,7 @@ export class WebSocketManager {
     }
 
     this.clients.delete(clientId);
+    this.clientLastSeqId.delete(clientId);
     logger.info({ clientId }, 'WebSocket client disconnected');
   }
 
@@ -175,18 +185,69 @@ export class WebSocketManager {
   }
 
   /**
-   * Broadcast event to all clients subscribed to a topic
+   * Handle missing message request from client
    */
-  broadcast(topic, event) {
+  async handleMissingMessageRequest(clientId, message) {
+    const { topic, fromSeqId, toSeqId } = message;
+    const client = this.clients.get(clientId);
+    
+    if (!client) {
+      logger.warn({ clientId }, 'Missing message request from unknown client');
+      return;
+    }
+
+    try {
+      const missingMessages = await websocketDLQService.getMessagesInRange(topic, fromSeqId, toSeqId);
+      
+      logger.info({ clientId, topic, fromSeqId, toSeqId, count: missingMessages.length }, 'Sending missing messages to client');
+      
+      for (const msg of missingMessages) {
+        this.send(client.ws, {
+          type: 'historical_message',
+          topic: msg.channel,
+          data: msg.message,
+          seqId: msg.seqId,
+          timestamp: msg.timestamp,
+        });
+      }
+
+      // Update client's last sequence ID
+      const clientSeqIds = this.clientLastSeqId.get(clientId);
+      if (clientSeqIds && missingMessages.length > 0) {
+        const lastMsg = missingMessages[missingMessages.length - 1];
+        clientSeqIds.set(topic, lastMsg.seqId);
+      }
+    } catch (error) {
+      logger.error({ clientId, topic, error: error.message }, 'Failed to retrieve missing messages');
+      this.send(client.ws, {
+        type: WS_EVENT_TYPES.ERROR,
+        message: 'Failed to retrieve missing messages',
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
+  /**
+   * Broadcast event to all clients subscribed to a topic
+   * Enhanced with sequence numbers and DLQ integration
+   */
+  async broadcast(topic, event) {
     const subscribers = this.subscriptions.get(topic);
     if (!subscribers || subscribers.size === 0) return;
+
+    // Assign sequence number for this broadcast
+    const seqId = websocketDLQService.getNextSequenceNumber(topic);
 
     const message = JSON.stringify({
       type: event.type,
       topic,
       data: event.data,
+      seqId,
       timestamp: new Date().toISOString(),
     });
+
+    // Store message in DLQ
+    await websocketDLQService.storeMessage(topic, { type: event.type, data: event.data }, seqId);
 
     const failedClients = [];
 
@@ -195,8 +256,15 @@ export class WebSocketManager {
       if (client && client.ws.readyState === 1) { // WebSocket.OPEN
         try {
           client.ws.send(message);
+          
+          // Update client's last sequence ID for this topic
+          const clientSeqIds = this.clientLastSeqId.get(clientId);
+          if (clientSeqIds) {
+            clientSeqIds.set(topic, seqId);
+          }
         } catch (error) {
           logger.error({ clientId, error: error.message }, 'Failed to send message');
+          await websocketDLQService.logDeliveryFailure(topic, clientId, seqId, error);
           failedClients.push(clientId);
         }
       }
@@ -206,8 +274,8 @@ export class WebSocketManager {
     failedClients.forEach(clientId => this.handleDisconnect(clientId));
 
     logger.debug(
-      { topic, subscriberCount: subscribers.size, sentCount: subscribers.size - failedClients.length },
-      'Event broadcasted'
+      { topic, seqId, subscriberCount: subscribers.size, sentCount: subscribers.size - failedClients.length },
+      'Event broadcasted with sequence number'
     );
   }
 
