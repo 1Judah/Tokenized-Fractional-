@@ -129,3 +129,5 @@ export function ProfileStatsSkeleton() {
     </div>
   );
 }
+
+export { default as SkeletonGrid } from './SkeletonGrid';

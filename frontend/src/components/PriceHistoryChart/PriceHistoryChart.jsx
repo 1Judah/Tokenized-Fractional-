@@ -14,6 +14,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import styles from './PriceHistoryChart.module.css';
+import WebGLPriceGraph from './WebGLPriceGraph';
 
 /**
  * PriceHistoryChart Component
@@ -181,85 +182,93 @@ export default function PriceHistoryChart({
 
       {/* Chart */}
       <div className={styles.chartContainer} style={{ height }}>
-        <ResponsiveContainer width="100%" height="100%">
-          {chartType === 'area' ? (
-            <AreaChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
-              <defs>
-                <linearGradient id="colorPrice" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor={strokeColor} stopOpacity={0.8} />
-                  <stop offset="95%" stopColor={strokeColor} stopOpacity={0.1} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-              <XAxis
-                dataKey="timestamp"
-                tickFormatter={formatXAxis}
-                stroke="#9ca3af"
-                style={{ fontSize: '12px' }}
-              />
-              <YAxis
-                tickFormatter={formatYAxis}
-                stroke="#9ca3af"
-                style={{ fontSize: '12px' }}
-              />
-              <Tooltip content={<CustomTooltip />} />
-              <Area
-                type="monotone"
-                dataKey="price"
-                stroke={strokeColor}
-                strokeWidth={2}
-                fillOpacity={1}
-                fill="url(#colorPrice)"
-                dot={false}
-              />
-            </AreaChart>
-          ) : chartType === 'bar' ? (
-            <BarChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-              <XAxis
-                dataKey="timestamp"
-                tickFormatter={formatXAxis}
-                stroke="#9ca3af"
-                style={{ fontSize: '12px' }}
-              />
-              <YAxis
-                tickFormatter={formatYAxis}
-                stroke="#9ca3af"
-                style={{ fontSize: '12px' }}
-              />
-              <Tooltip content={<CustomTooltip />} />
-              <Bar
-                dataKey="price"
-                fill={strokeColor}
-                radius={[4, 4, 0, 0]}
-              />
-            </BarChart>
-          ) : (
-            <LineChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-              <XAxis
-                dataKey="timestamp"
-                tickFormatter={formatXAxis}
-                stroke="#9ca3af"
-                style={{ fontSize: '12px' }}
-              />
-              <YAxis
-                tickFormatter={formatYAxis}
-                stroke="#9ca3af"
-                style={{ fontSize: '12px' }}
-              />
-              <Tooltip content={<CustomTooltip />} />
-              <Line
-                type="monotone"
-                dataKey="price"
-                stroke={strokeColor}
-                strokeWidth={2}
-                dot={false}
-                isAnimationActive={false}
-              />
-            </LineChart>
-          )}
-        </ResponsiveContainer>
+        {chartType === 'webgl' || data.length >= 1000 ? (
+          <WebGLPriceGraph
+            data={data}
+            color={strokeColor}
+            height={height}
+          />
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            {chartType === 'area' ? (
+              <AreaChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="colorPrice" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={strokeColor} stopOpacity={0.8} />
+                    <stop offset="95%" stopColor={strokeColor} stopOpacity={0.1} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <XAxis
+                  dataKey="timestamp"
+                  tickFormatter={formatXAxis}
+                  stroke="#9ca3af"
+                  style={{ fontSize: '12px' }}
+                />
+                <YAxis
+                  tickFormatter={formatYAxis}
+                  stroke="#9ca3af"
+                  style={{ fontSize: '12px' }}
+                />
+                <Tooltip content={<CustomTooltip />} />
+                <Area
+                  type="monotone"
+                  dataKey="price"
+                  stroke={strokeColor}
+                  strokeWidth={2}
+                  fillOpacity={1}
+                  fill="url(#colorPrice)"
+                  dot={false}
+                />
+              </AreaChart>
+            ) : chartType === 'bar' ? (
+              <BarChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <XAxis
+                  dataKey="timestamp"
+                  tickFormatter={formatXAxis}
+                  stroke="#9ca3af"
+                  style={{ fontSize: '12px' }}
+                />
+                <YAxis
+                  tickFormatter={formatYAxis}
+                  stroke="#9ca3af"
+                  style={{ fontSize: '12px' }}
+                />
+                <Tooltip content={<CustomTooltip />} />
+                <Bar
+                  dataKey="price"
+                  fill={strokeColor}
+                  radius={[4, 4, 0, 0]}
+                />
+              </BarChart>
+            ) : (
+              <LineChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <XAxis
+                  dataKey="timestamp"
+                  tickFormatter={formatXAxis}
+                  stroke="#9ca3af"
+                  style={{ fontSize: '12px' }}
+                />
+                <YAxis
+                  tickFormatter={formatYAxis}
+                  stroke="#9ca3af"
+                  style={{ fontSize: '12px' }}
+                />
+                <Tooltip content={<CustomTooltip />} />
+                <Line
+                  type="monotone"
+                  dataKey="price"
+                  stroke={strokeColor}
+                  strokeWidth={2}
+                  dot={false}
+                  isAnimationActive={false}
+                />
+              </LineChart>
+            )}
+          </ResponsiveContainer>
+        )}
       </div>
 
       {/* Footer with data info */}
