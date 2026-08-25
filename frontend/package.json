@@ -26,9 +26,11 @@
     "perf:check": "node scripts/check-performance-budget.js"
   },
   "dependencies": {
+    "@apollo/client": "^3.11.8",
     "@sentry/react": "^10.60.0",
     "@stellar/freighter-api": "^6.0.1",
     "@stellar/stellar-sdk": "^16.0.0",
+    "graphql": "^16.9.0",
     "html2canvas": "^1.4.1",
     "i18next": "^24.0.0",
     "i18next-browser-languagedetector": "^8.0.0",
@@ -38,6 +40,7 @@
     "react-dom": "^18.3.1",
     "react-i18next": "^15.0.0",
     "react-router-dom": "^6.27.0",
+    "react-hot-toast": "^2.4.1",
     "recharts": "^2.10.3",
     "workbox-background-sync": "^7.4.1",
     "workbox-cacheable-response": "^7.4.1",
