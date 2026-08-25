@@ -27,6 +27,8 @@ import { RateLimitAnalytics } from './src/services/rateLimitAnalytics.js';
 import { BillingService } from './src/services/billingService.js';
 import { createRateLimiter } from './src/middleware/rateLimiter.js';
 import { createRateLimitAdminRoutes } from './src/routes/rateLimitAdmin.js';
+import { applyCursorPagination, CursorError, paginationErrorHandler, SORT_FIELDS } from './src/services/cursorPagination.js';
+import { parsePaginationParams } from './src/middleware/cursorPagination.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // multer memoryStorage keeps the file in memory as a Buffer (req.file.buffer).
@@ -571,6 +573,11 @@ v1.get('/rwa/export', adminAuth, (req, res) => {
   res.json(assets);
 });
 
+// GET /api/rwa?after=<cursor>&before=<cursor>&limit=20&sort=createdAt&order=desc&assetType=real_estate&search=coffee
+app.get('/api/rwa', (req, res, next) => {
+  try {
+    const data = loadData();
+    const assets = Object.entries(data).map(([contractId, meta]) => ({ contractId, ...meta }));
 /**
  * @openapi
  * /api/v1/rwa:
@@ -652,15 +659,16 @@ v1.get('/rwa', (req, res) => {
   const totalPages = Math.ceil(total / pageSize) || 1;
   const offset = (pageNum - 1) * pageSize;
 
-  assets = assets.slice(offset, offset + pageSize);
+    const paginationParams = parsePaginationParams(req);
+    const result = applyCursorPagination(assets, paginationParams);
 
-  res.json({
-    data: assets,
-    pagination: { total, page: pageNum, limit: pageSize, totalPages },
-  });
+    res.json(result);
 
-  // Cache the full asset list (fire-and-forget)
-  cacheSet('rwa:all', { data: assets, pagination: { total, page: pageNum, limit: pageSize, totalPages } }).catch(() => {});
+    // Cache the asset list result (fire-and-forget)
+    cacheSet('rwa:all', result).catch(() => {});
+  } catch (error) {
+    next(error);
+  }
 });
 
 /**
@@ -985,6 +993,8 @@ v1.delete('/rwa/:contractId', adminAuth, writeLimiter, async (req, res) => {
   res.json({ message: 'Asset metadata deleted', contractId });
 });
 
+// Cursor pagination error handler
+app.use(paginationErrorHandler);
 /**
  * @openapi
  * /api/v1/rwa/{contractId}:

@@ -81,7 +81,7 @@ export function createTimeWindowRoutes(timeWindowService, logger, adminAuth) {
     }
   });
 
-  // ── GET /:contractId/:windowId/events — Get window events ─────────────────
+  // ── GET /:contractId/:windowId/events — Get window events (cursor-based) ──
   router.get('/:contractId/:windowId/events', async (req, res) => {
     try {
       const { contractId, windowId } = req.params;
@@ -89,13 +89,14 @@ export function createTimeWindowRoutes(timeWindowService, logger, adminAuth) {
         return res.status(400).json({ error: 'Invalid contract ID' });
       }
 
-      const { limit, offset } = req.query;
-      const events = await timeWindowService.getWindowEvents(contractId, windowId, {
+      const { limit, after, before } = req.query;
+      const result = await timeWindowService.getWindowEventsCursor(contractId, windowId, {
         limit: limit ? parseInt(limit) : 50,
-        offset: offset ? parseInt(offset) : 0,
+        after,
+        before,
       });
 
-      res.json({ data: events, total: events.length });
+      res.json(result);
     } catch (error) {
       logger?.error({ error: error.message }, 'Failed to get window events');
       res.status(500).json({ error: 'Failed to get window events' });
@@ -151,7 +152,7 @@ export function createTimeWindowRoutes(timeWindowService, logger, adminAuth) {
     }
   });
 
-  // ── GET /:contractId/events — All events for asset's time windows ─────────
+  // ── GET /:contractId/events — All events for asset's time windows (cursor) ─
   router.get('/:contractId/events', async (req, res) => {
     try {
       const { contractId } = req.params;
@@ -159,16 +160,17 @@ export function createTimeWindowRoutes(timeWindowService, logger, adminAuth) {
         return res.status(400).json({ error: 'Invalid contract ID' });
       }
 
-      const { eventType, from, to, limit, offset } = req.query;
-      const events = await timeWindowService.getAssetWindowEvents(contractId, {
+      const { eventType, from, to, limit, after, before } = req.query;
+      const result = await timeWindowService.getAssetWindowEventsCursor(contractId, {
         eventType,
         from,
         to,
         limit: limit ? parseInt(limit) : 100,
-        offset: offset ? parseInt(offset) : 0,
+        after,
+        before,
       });
 
-      res.json({ data: events, total: events.length });
+      res.json(result);
     } catch (error) {
       logger?.error({ error: error.message }, 'Failed to get asset window events');
       res.status(500).json({ error: 'Failed to get asset window events' });

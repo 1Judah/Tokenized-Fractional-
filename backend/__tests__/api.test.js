@@ -115,9 +115,9 @@ describe('GET /api/rwa', () => {
     expect(Array.isArray(res.body.data)).toBe(true);
     expect(res.body.pagination).toBeDefined();
     expect(res.body.pagination.total).toBeGreaterThanOrEqual(2);
-    expect(res.body.pagination.page).toBe(1);
     expect(res.body.pagination.limit).toBe(20);
-    expect(res.body.pagination.totalPages).toBeGreaterThanOrEqual(1);
+    expect(typeof res.body.pagination.hasNext).toBe('boolean');
+    expect(typeof res.body.pagination.hasPrev).toBe('boolean');
   });
 
   test('returns relative image and document paths through configured CDN', async () => {
@@ -165,16 +165,15 @@ describe('GET /api/rwa', () => {
   });
 
   test('paginates with limit=1', async () => {
-    const res = await request(app).get('/api/rwa?limit=1&page=1');
+    const res = await request(app).get('/api/rwa?limit=1');
     expect(res.status).toBe(200);
     expect(res.body.data.length).toBe(1);
     expect(res.body.pagination.limit).toBe(1);
-    expect(res.body.pagination.page).toBe(1);
   });
 
-  test('page 2 with limit=1 returns next item', async () => {
-    const page1 = await request(app).get('/api/rwa?limit=1&page=1');
-    const page2 = await request(app).get('/api/rwa?limit=1&page=2');
+  test('cursor pagination returns different items on next page', async () => {
+    const page1 = await request(app).get('/api/rwa?limit=1');
+    const page2 = await request(app).get(`/api/rwa?limit=1&after=${page1.body.pagination.nextCursor}`);
     expect(page1.body.data[0].contractId).not.toBe(page2.body.data[0].contractId);
   });
 });
