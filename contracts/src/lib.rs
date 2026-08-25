@@ -226,11 +226,24 @@ pub struct TransferApproval {
     pub approved: bool,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EventTopics {
+    Vault,
+    Mint,
+    Burn,
+    Transfer,
+    Dividend,
+    Buyback,
+    Admin,
+}
+
 #[contractevent(data_format = "vec")]
 pub struct EventBuybackShares {
-    seller: Address,
-    amount: u32,
-    total_cost: i128,
+    pub caller: Address,
+    pub seller: Address,
+    pub amount: u32,
+    pub total_cost: i128,
 }
 
 #[contractevent(data_format = "vec")]
@@ -282,9 +295,10 @@ pub struct EventInit {
 
 #[contractevent(data_format = "vec")]
 pub struct EventBuyShares {
-    buyer: Address,
-    shares: u32,
-    total_cost: i128,
+    pub caller: Address,
+    pub buyer: Address,
+    pub shares: u32,
+    pub total_cost: i128,
 }
 
 #[contractevent]
@@ -404,9 +418,10 @@ pub struct EventUserPurchaseReset {
 
 #[contractevent(data_format = "vec")]
 pub struct EventTransfer {
-    from: Address,
-    to: Address,
-    amount: u32,
+    pub caller: Address,
+    pub from: Address,
+    pub to: Address,
+    pub amount: u32,
 }
 
 #[contractevent(data_format = "vec")]
@@ -692,7 +707,7 @@ impl RwaMarketplace {
         // Clear reentrancy guard before publishing event
         _set_non_reentrant(&env, false);
 
-        EventBuyShares { buyer, shares, total_cost }.publish(&env);
+        EventBuyShares { caller: buyer.clone(), buyer, shares, total_cost }.publish(&env);
     }
 
     /// Set (or update) the share-certificate NFT contract address. Admin only.

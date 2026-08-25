@@ -86,6 +86,21 @@ let redisClient = null;
 let redisConnected = false;
 
 /**
+ * Lua script for atomic rate limit increment and expiry setting.
+ * KEYS[1] = rate limit key
+ * ARGV[1] = window in milliseconds
+ * Returns: { count, ttl_in_ms }
+ */
+const RATE_LIMIT_SCRIPT = `
+  local current = redis.call('INCR', KEYS[1])
+  if current == 1 then
+    redis.call('PEXPIRE', KEYS[1], ARGV[1])
+  end
+  local ttl = redis.call('PTTL', KEYS[1])
+  return {current, ttl}
+`;
+
+/**
  * Initialize Redis client if URL is provided
  */
 export async function initializeRedisLimiter() {
@@ -100,6 +115,12 @@ export async function initializeRedisLimiter() {
       connectTimeout: 3000,
       maxRetriesPerRequest: 0,
       enableReadyCheck: false,
+    });
+
+    // Define custom atomic command
+    redisClient.defineCommand('atomicRateLimit', {
+      numberOfKeys: 1,
+      lua: RATE_LIMIT_SCRIPT,
     });
 
     redisClient.on('error', (err) => {
@@ -151,13 +172,12 @@ const memoryStore = new Map();
 async function getRateLimitInfo(key, windowMs) {
   if (redisConnected && redisClient) {
     try {
-      const count = await redisClient.incr(key);
-      const ttl = await redisClient.ttl(key);
-
-      if (ttl === -1) {
-        // First time seeing this key, set TTL
-        await redisClient.expire(key, Math.ceil(windowMs / 1000));
-      }
+      const result = await redisClient.atomicRateLimit(key, windowMs);
+      const count = result[0];
+      const ttlMs = result[1];
+      
+      // Convert ttl from ms to seconds for consistency with previous implementation
+      const ttl = ttlMs > 0 ? Math.ceil(ttlMs / 1000) : Math.ceil(windowMs / 1000);
 
       return { count, ttl };
     } catch (error) {

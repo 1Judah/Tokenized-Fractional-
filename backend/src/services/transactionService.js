@@ -38,9 +38,32 @@ export class TransactionService {
   async recordPurchase(data) {
     try {
       const transactionId = `tx_${randomUUID().replace(/-/g, '').slice(0, 20)}`;
+      const eventIndex = data.eventIndex || 0;
+      
+      // Redis duplicate check
+      let redisCache = null;
+      try {
+        const { REDIS_URL } = await import('../config.js');
+        const Redis = (await import('ioredis')).default;
+        if (REDIS_URL && !this._redisClient) {
+          this._redisClient = new Redis(REDIS_URL, { lazyConnect: true });
+          await this._redisClient.connect().catch(() => {});
+        }
+        redisCache = this._redisClient;
+      } catch(e) {}
 
-      // Insert transaction
-      const [transaction] = await this.db('transactions').insert({
+      if (redisCache && data.blockchainHash) {
+         const cacheKey = `processed_tx:${data.blockchainHash}:${eventIndex}`;
+         const setnxRes = await redisCache.setnx(cacheKey, '1');
+         if (setnxRes === 0) {
+           this.logger.info({ blockchainHash: data.blockchainHash }, 'Duplicate transaction ignored by Redis cache');
+           return null;
+         }
+         await redisCache.expire(cacheKey, 86400); // 24 hours
+      }
+
+      // Insert transaction with idempotent ON CONFLICT DO NOTHING
+      const insertData = {
         transaction_id: transactionId,
         contract_id: data.contractId,
         buyer_address: data.buyerAddress,
@@ -50,9 +73,25 @@ export class TransactionService {
         payment_token: data.paymentToken,
         status: 'completed',
         blockchain_hash: data.blockchainHash || null,
+        event_index: eventIndex,
         metadata: data.metadata || {},
         created_at: new Date(),
-      }).returning('*');
+      };
+
+      const query = this.db('transactions').insert(insertData);
+      let transaction;
+      
+      if (data.blockchainHash) {
+        const result = await query.onConflict(['blockchain_hash', 'event_index']).ignore().returning('*');
+        if (result.length === 0) {
+          this.logger.info({ blockchainHash: data.blockchainHash }, 'Duplicate transaction ignored by DB');
+          return null; // DB conflict caught it
+        }
+        transaction = result[0];
+      } else {
+        const result = await query.returning('*');
+        transaction = result[0];
+      }
 
       // Update or create user activity
       const existingUser = await this.db('user_activity')
