@@ -34,7 +34,6 @@ import {
 import { useAssetStore } from './store/useAssetStore';
 import { useToastStore } from './store/useToastStore';
 import useTransactionStatus from './hooks/useTransactionStatus';
-import { useSorobanRead, useSorobanWrite } from './hooks/useSoroban';
 
 const CONTRACT_ID = import.meta.env.VITE_CONTRACT_ID || 'C...';
 const NETWORK_PASSPHRASE = import.meta.env.VITE_NETWORK_PASSPHRASE || Networks.TESTNET;
