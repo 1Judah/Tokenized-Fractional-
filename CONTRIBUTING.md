@@ -80,6 +80,35 @@ Be respectful, collaborative, and constructive. Harassment, offensive comments, 
 
 ---
 
+## GraphQL Quickstart
+
+The backend exposes a GraphQL API for querying marketplace assets. For a detailed walkthrough, see [GRAPHQL_QUICKSTART.md](GRAPHQL_QUICKSTART.md).
+
+### Quick Setup
+
+1. **Start the backend** (from `backend/`):
+   ```bash
+   npm run dev
+   ```
+
+2. **Open the GraphQL Playground**:
+   ```
+   http://localhost:3001/graphql
+   ```
+
+3. **Run a test query** in Apollo Sandbox:
+   ```graphql
+   query {
+     assets(limit: 5) {
+       contractId
+       title
+       pricePerShare
+     }
+   }
+   ```
+
+---
+
 ## Development Workflow
 
 1. Pick an issue from the [issue tracker](https://github.com/Trust-Analysis/Tokenized-Fractional-/issues).
