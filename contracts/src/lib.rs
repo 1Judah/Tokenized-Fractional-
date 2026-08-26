@@ -2428,6 +2428,12 @@ impl RwaMarketplace {
         // Re-entrancy guard: protect balance updates
         _check_non_reentrant(&env);
 
+        // Global pause check
+        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+            _set_non_reentrant(&env, false);
+            panic!("Marketplace is paused");
+        }
+
         // Issue #310: Check granular pause for transfers
         if _is_function_paused(&env, FN_TRANSFER) {
             _set_non_reentrant(&env, false);
@@ -2618,6 +2624,11 @@ impl RwaMarketplace {
     pub fn place_sell_order(env: Env, seller: Address, amount: u32, price_per_share: i128) -> u64 {
         seller.require_auth();
 
+        // Global pause check
+        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+            panic!("Marketplace is paused");
+        }
+
         // Issue #310: Check granular pause for sell orders
         if _is_function_paused(&env, FN_SELL_ORDER) {
             panic!("Sell orders are currently paused");
@@ -2679,6 +2690,16 @@ impl RwaMarketplace {
     /// Buy `amount` shares from an open sell order, paying the seller directly.
     pub fn buy_from_order(env: Env, buyer: Address, order_id: u64, amount: u32) {
         buyer.require_auth();
+
+        // Global pause check
+        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+            panic!("Marketplace is paused");
+        }
+
+        // Issue #310: Check granular pause for order purchases
+        if _is_function_paused(&env, FN_BUY_SHARES) {
+            panic!("Purchases are currently paused");
+        }
 
         if amount == 0 {
             panic!("Purchase amount must be positive");
@@ -2965,6 +2986,11 @@ impl RwaMarketplace {
     /// returned to the available pool. Seller auth is required.
     pub fn buyback_shares(env: Env, seller: Address, amount: u32) {
         seller.require_auth();
+
+        // Global pause check
+        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+            panic!("Marketplace is paused");
+        }
 
         // Issue #310: Check granular pause for buybacks
         if _is_function_paused(&env, FN_BUYBACK) {
@@ -7077,6 +7103,62 @@ mod sip4_metadata_tests {
         c.buy_shares(&te.buyer, &100, &te.token_id);
         mint(&te, &te.contract_id, 50_000);
         c.pause_function(&4_u32);
+        c.buyback_shares(&te.buyer, &10);
+    }
+
+    // ── Issue #465: Global pause checks for all state-changing operations ──
+
+    #[test]
+    #[should_panic(expected = "Marketplace is paused")]
+    fn test_transfer_shares_when_paused() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+        c.buy_shares(&te.buyer, &10, &te.token_id);
+        c.pause();
+        c.transfer_shares(&te.buyer, &te.admin, &5);
+    }
+
+    #[test]
+    #[should_panic(expected = "Marketplace is paused")]
+    fn test_place_sell_order_when_paused() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+        c.buy_shares(&te.buyer, &10, &te.token_id);
+        c.pause();
+        c.place_sell_order(&te.buyer, &5, &100_i128);
+    }
+
+    #[test]
+    #[should_panic(expected = "Marketplace is paused")]
+    fn test_buy_from_order_when_paused() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+        c.buy_shares(&te.buyer, &10, &te.token_id);
+        let order_id = c.place_sell_order(&te.buyer, &5, &100_i128);
+        c.pause();
+        c.buy_from_order(&te.admin, &order_id, &5);
+    }
+
+    #[test]
+    #[should_panic(expected = "Marketplace is paused")]
+    fn test_buyback_shares_when_paused() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+        c.buy_shares(&te.buyer, &100, &te.token_id);
+        mint(&te, &te.contract_id, 50_000);
+        c.pause();
         c.buyback_shares(&te.buyer, &10);
     }
 }
