@@ -119,6 +119,26 @@ graph TB
 
 The backend can be containerized with the provided `backend/Dockerfile`.
 
+### Quick Start — API + Database + Redis
+
+```bash
+# Copy environment template
+cp backend/.env.example backend/.env
+
+# Start backend, PostgreSQL, and Redis (dev profile)
+docker compose --profile dev up --build
+
+# Or run detached
+docker compose --profile dev up --build -d
+```
+
+This starts:
+- **Backend API** on `http://localhost:3001`
+- **PostgreSQL** on `localhost:5432`
+- **Redis** on `localhost:6379`
+
+### Standalone Backend
+
 ```bash
 # Build the image
 docker build -t rwa-backend ./backend
@@ -127,7 +147,39 @@ docker build -t rwa-backend ./backend
 docker run -p 3001:3001 --env-file ./backend/.env rwa-backend
 ```
 
-The container runs as a non-root user and exposes port `3001`.
+### Full Stack (Backend + Frontend + Database + Redis)
+
+```bash
+# Dev mode with hot-reload frontend
+docker compose --profile dev --profile prod up --build
+
+# Production mode with nginx frontend
+docker compose --profile prod up --build
+```
+
+### With Monitoring (ELK + Prometheus + Grafana)
+
+```bash
+docker compose --profile dev --profile monitoring up --build
+```
+
+### Useful Commands
+
+```bash
+# View running containers
+docker compose ps
+
+# View logs
+docker compose logs -f backend
+
+# Stop all services
+docker compose down
+
+# Stop and remove volumes (fresh start)
+docker compose down -v
+```
+
+The container runs as a non-root user and includes a health check endpoint at `/health`.
 
 ## Getting Started
 
