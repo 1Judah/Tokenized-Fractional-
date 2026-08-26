@@ -14,6 +14,7 @@
  */
 
 import { Router } from 'express';
+import { invalidatePriceHistoryCache } from '../../services/priceHistoryCache.js';
 
 /**
  * Factory function to create purchase routes
@@ -106,6 +107,9 @@ export function createPurchaseRoutes(transactionService, logger) {
         totalAmount,
         requestId: req.requestId,
       }, 'Purchase recorded');
+
+      // Invalidate cached price history so the next query reflects the new trade
+      invalidatePriceHistoryCache(contractId).catch(() => {});
 
       res.status(201).json({
         data: {
