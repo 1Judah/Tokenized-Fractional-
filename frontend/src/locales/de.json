@@ -1,0 +1,60 @@
+{
+  "nav": {
+    "marketplace": "Marktplatz",
+    "portfolio": "Portfolio",
+    "admin": "Verwaltung",
+    "history": "Verlauf"
+  },
+  "wallet": {
+    "connect": "Freighter Verbinden",
+    "connecting": "Verbindung wird hergestellt…",
+    "disconnect": "Trennen",
+    "connected": "Verbunden"
+  },
+  "marketplace": {
+    "title": "RWA-Vermögensmarktplatz",
+    "availableAssets": "Verfügbare Vermögenswerte",
+    "shareBalance": "Ihre Anteile",
+    "buyShares": "Bruchteile Kaufen",
+    "processing": "Wird verarbeitet…",
+    "buyButton": "Anteile Kaufen",
+    "contractNotConfigured": "Vertrag nicht konfiguriert."
+  },
+  "portfolio": {
+    "title": "Portfolio",
+    "subtitle": "Ihre Bruchteilvermögen auf allen Märkten",
+    "refresh": "Aktualisieren",
+    "refreshing": "Wird aktualisiert…",
+    "assetsHeld": "Gehaltene Vermögenswerte",
+    "totalShares": "Gesamtanteile",
+    "totalValue": "Gesamtwert",
+    "noHoldings": "Keine Positionen",
+    "noHoldingsSub": "Sie besitzen noch keine Anteile. Erkunden Sie den Marktplatz.",
+    "connectWallet": "Verbinden Sie Ihr Portemonnaie, um Ihr Portfolio anzuzeigen",
+    "noAssets": "Keine Vermögenswerte verfügbar"
+  },
+  "history": {
+    "title": "Transaktionsverlauf",
+    "refresh": "Aktualisieren",
+    "refreshing": "Wird aktualisiert…",
+    "hash": "Hash",
+    "date": "Datum",
+    "operations": "Vorgänge",
+    "status": "Status",
+    "success": "Erfolgreich",
+    "failed": "Fehlgeschlagen",
+    "empty": "Keine Transaktionen",
+    "emptySub": "Ihre kürzlichen Stellar-Transaktionen werden hier angezeigt.",
+    "connectWallet": "Verbinden Sie Ihr Portemonnaie, um den Verlauf anzuzeigen",
+    "fetchError": "Fehler beim Laden des Verlaufs. Bitte versuchen Sie es erneut."
+  },
+  "theme": {
+    "toDark": "Zum Dunklen Design Wechseln",
+    "toLight": "Zum Hellen Design Wechseln"
+  },
+  "common": {
+    "loading": "Wird geladen…",
+    "error": "Ein Fehler ist aufgetreten.",
+    "retry": "Erneut Versuchen"
+  }
+}
