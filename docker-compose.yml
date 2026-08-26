@@ -22,6 +22,8 @@ services:
     environment:
       PORT: "3001"
       NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-rwa_user}:${POSTGRES_PASSWORD:-rwa_password}@postgres:5432/${POSTGRES_DB:-rwa_marketplace}
+      REDIS_URL: redis://redis:6379
     ports:
       - "3001:3001"
     volumes:
@@ -34,6 +36,12 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    profiles: ["dev", "prod"]
 
   # ── Dev frontend (Vite HMR) — default ──────────────────────────────────────
   frontend-dev:
@@ -93,7 +101,31 @@ services:
     command: redis-server --save "" --appendonly no
     ports:
       - "6379:6379"
-    profiles: ["redis", "prod"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    profiles: ["redis", "prod", "dev"]
+
+  # ── PostgreSQL — persistent data store ──────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-rwa_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rwa_password}
+      POSTGRES_DB: ${POSTGRES_DB:-rwa_marketplace}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rwa_user} -d ${POSTGRES_DB:-rwa_marketplace}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles: ["dev", "prod"]
 
   # ═══════════════════════════════════════════════════════════════════════════
   # ELK Stack — Centralized Log Aggregation & Analysis
@@ -232,6 +264,7 @@ services:
 
 volumes:
   backend-data:
+  postgres-data:
   elk-elasticsearch:
   prometheus-data:
   grafana-data:
