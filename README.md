@@ -94,6 +94,9 @@ graph TB
 
 ## Documentation
 
+- [Linux Development Setup and SSH Account Routing](docs/development-setup.md)
+- [Jenkins Integration Pipeline](docs/jenkins.md)
+- [Contract Resource Benchmarks](docs/contract-benchmarks.md)
 - [Architecture Overview & Diagrams](docs/architecture.md)
 - [Architecture Decision Records (ADRs)](docs/adr/README.md) — Technical decisions and rationale
 - [Security Best Practices Guide](docs/security.md) — Security guidelines, audit checklist, and incident response

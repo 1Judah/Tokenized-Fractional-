@@ -33,6 +33,11 @@ Be respectful, collaborative, and constructive. Harassment, offensive comments, 
 
 ### Local Setup
 
+For a complete Ubuntu/Debian setup, run [`scripts/setup.sh`](scripts/setup.sh). It installs the required Node.js, Docker, Terraform, Rust, and Soroban toolchains. See [Development Setup](docs/development-setup.md) for SSH aliases when using multiple GitHub accounts.
+
+Jenkins integration testing is documented in [Jenkins Integration Pipeline](docs/jenkins.md).
+Run [Contract Resource Benchmarks](docs/contract-benchmarks.md) before changing or deploying contract state-change logic.
+
 1. **Clone the repository**
 
    ```bash
