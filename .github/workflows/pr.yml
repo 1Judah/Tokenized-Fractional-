@@ -5,6 +5,30 @@ on:
     branches: [main]
 
 jobs:
+  pr-title-lint:
+    name: PR Title Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check PR title matches conventional commits format
+        uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert
+          requireScope: false
+
   security-audit:
     name: Security Vulnerability Audit
     runs-on: ubuntu-latest
