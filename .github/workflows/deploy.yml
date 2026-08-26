@@ -4,19 +4,109 @@ on:
   push:
     branches: [main]
 
+env:
+  BACKEND_URL: ${{ secrets.RENDER_BACKEND_SERVICE_URL }}
+  FRONTEND_URL: ${{ secrets.RENDER_FRONTEND_SERVICE_URL }}
+
 jobs:
   deploy-backend:
     name: Deploy Backend
     runs-on: ubuntu-latest
+    outputs:
+      deploy_status: ${{ steps.healthcheck.outputs.status }}
     steps:
       - name: Trigger Render backend deploy
+        id: deploy
         run: |
           curl -f -X POST "${{ secrets.RENDER_BACKEND_DEPLOY_HOOK }}"
+          echo "deploy_id=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for deployment to stabilize
+        run: sleep 30
+
+      - name: Health check
+        id: healthcheck
+        run: |
+          echo "Checking backend health at ${BACKEND_URL}/health"
+          for i in 1 2 3 4 5; do
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${BACKEND_URL}/health" || true)
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "status=healthy" >> "$GITHUB_OUTPUT"
+              echo "Backend health check passed (attempt $i)"
+              exit 0
+            fi
+            echo "Attempt $i: status=$HTTP_STATUS, retrying in 15s..."
+            sleep 15
+          done
+          echo "status=unhealthy" >> "$GITHUB_OUTPUT"
+          echo "::error::Backend health check failed after 5 attempts"
+          exit 1
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "::warning::Backend deploy failed — triggering rollback to previous release"
+          curl -f -X POST "${{ secrets.RENDER_BACKEND_DEPLOY_HOOK }}" \
+            -H "Content-Type: application/json" \
+            -d '{"rollback": true}' || true
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          STATUS="${{ steps.healthcheck.outputs.status || 'failed' }}"
+          if [ "$STATUS" = "healthy" ]; then
+            echo "Backend deployment succeeded and is healthy."
+          else
+            echo "::warning::Backend deployment failed or health check unsuccessful."
+          fi
 
   deploy-frontend:
     name: Deploy Frontend
+    needs: deploy-backend
+    if: needs.deploy-backend.outputs.deploy_status == 'healthy'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Render frontend deploy
+        id: deploy
         run: |
           curl -f -X POST "${{ secrets.RENDER_FRONTEND_DEPLOY_HOOK }}"
+          echo "deploy_id=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for deployment to stabilize
+        run: sleep 30
+
+      - name: Health check
+        id: healthcheck
+        run: |
+          echo "Checking frontend health at ${FRONTEND_URL}"
+          for i in 1 2 3 4 5; do
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${FRONTEND_URL}" || true)
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "status=healthy" >> "$GITHUB_OUTPUT"
+              echo "Frontend health check passed (attempt $i)"
+              exit 0
+            fi
+            echo "Attempt $i: status=$HTTP_STATUS, retrying in 15s..."
+            sleep 15
+          done
+          echo "status=unhealthy" >> "$GITHUB_OUTPUT"
+          echo "::error::Frontend health check failed after 5 attempts"
+          exit 1
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "::warning::Frontend deploy failed — triggering rollback to previous release"
+          curl -f -X POST "${{ secrets.RENDER_FRONTEND_DEPLOY_HOOK }}" \
+            -H "Content-Type: application/json" \
+            -d '{"rollback": true}' || true
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          STATUS="${{ steps.healthcheck.outputs.status || 'failed' }}"
+          if [ "$STATUS" = "healthy" ]; then
+            echo "Frontend deployment succeeded and is healthy."
+          else
+            echo "::warning::Frontend deployment failed or health check unsuccessful."
+          fi
