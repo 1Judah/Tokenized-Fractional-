@@ -1,0 +1,190 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  security-audit:
+    name: Security Vulnerability Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Backend audit ────────────────────────────────────────────────────
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+        working-directory: backend
+      - name: Audit backend dependencies
+        id: audit-backend
+        run: |
+          set +e
+          OUTPUT=$(npm audit --audit-level=high --json 2>&1)
+          EXIT_CODE=$?
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+
+          # Count high/critical vulnerabilities
+          HIGH=$(echo "$OUTPUT" | node -e "
+            const d=require('fs').readFileSync('/dev/stdin','utf8');
+            const j=JSON.parse(d);
+            console.log((j.metadata?.vulnerabilities?.high||0)+(j.metadata?.vulnerabilities?.critical||0));
+          " 2>/dev/null || echo "0")
+          echo "high_count=$HIGH" >> "$GITHUB_OUTPUT"
+
+          # Save markdown for PR comment
+          if [ "$EXIT_CODE" -ne 0 ]; then
+            {
+              echo "## Security Audit: Backend"
+              echo ""
+              echo "### Vulnerabilities Found"
+              echo ""
+              echo '```json'
+              echo "$OUTPUT" | node -e "
+                const d=require('fs').readFileSync('/dev/stdin','utf8');
+                const j=JSON.parse(d);
+                const v=j.metadata?.vulnerabilities||{};
+                console.log(JSON.stringify({high:v.high||0,critical:v.critical||0,moderate:v.moderate||0,low:v.low||0},null,2));
+              " 2>/dev/null || echo "$OUTPUT"
+              echo '```'
+              echo ""
+              echo "> Run \`npm audit\` in \`backend/\` for full details."
+            } > /tmp/audit-backend.md
+          fi
+        working-directory: backend
+
+      # ── Frontend audit ───────────────────────────────────────────────────
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - name: Audit frontend dependencies
+        id: audit-frontend
+        run: |
+          set +e
+          OUTPUT=$(npm audit --audit-level=high --json 2>&1)
+          EXIT_CODE=$?
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+
+          HIGH=$(echo "$OUTPUT" | node -e "
+            const d=require('fs').readFileSync('/dev/stdin','utf8');
+            const j=JSON.parse(d);
+            console.log((j.metadata?.vulnerabilities?.high||0)+(j.metadata?.vulnerabilities?.critical||0));
+          " 2>/dev/null || echo "0")
+          echo "high_count=$HIGH" >> "$GITHUB_OUTPUT"
+
+          if [ "$EXIT_CODE" -ne 0 ]; then
+            {
+              echo "## Security Audit: Frontend"
+              echo ""
+              echo "### Vulnerabilities Found"
+              echo ""
+              echo '```json'
+              echo "$OUTPUT" | node -e "
+                const d=require('fs').readFileSync('/dev/stdin','utf8');
+                const j=JSON.parse(d);
+                const v=j.metadata?.vulnerabilities||{};
+                console.log(JSON.stringify({high:v.high||0,critical:v.critical||0,moderate:v.moderate||0,low:v.low||0},null,2));
+              " 2>/dev/null || echo "$OUTPUT"
+              echo '```'
+              echo ""
+              echo "> Run \`npm audit\` in \`frontend/\` for full details."
+            } > /tmp/audit-frontend.md
+          fi
+        working-directory: frontend
+
+      # ── Post PR comment if vulnerabilities detected ──────────────────────
+      - name: Comment on PR with audit results
+        if: steps.audit-backend.outputs.exit_code != '0' || steps.audit-frontend.outputs.exit_code != '0'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: security-audit
+          message: |
+            ## Dependency Security Audit
+
+            | Package | High/Critical |
+            |---------|:---:|
+            | Backend | ${{ steps.audit-backend.outputs.high_count || 0 }} |
+            | Frontend | ${{ steps.audit-frontend.outputs.high_count || 0 }} |
+
+            ${{ steps.audit-backend.outputs.exit_code != '0' && '⚠️ **Backend** has high/critical vulnerabilities — see job log.' || '✅ Backend audit passed.' }}
+
+            ${{ steps.audit-frontend.outputs.exit_code != '0' && '⚠️ **Frontend** has high/critical vulnerabilities — see job log.' || '✅ Frontend audit passed.' }}
+
+      # ── Fail the job if high/critical vulns exist ────────────────────────
+      - name: Fail on high/critical vulnerabilities
+        if: steps.audit-backend.outputs.exit_code != '0' || steps.audit-frontend.outputs.exit_code != '0'
+        run: |
+          echo "::error::High or critical dependency vulnerabilities detected. See PR comment for details."
+          exit 1
+
+  contract-tests:
+    name: Smart Contract Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts
+      - run: cargo test
+        working-directory: contracts
+
+  backend-tests:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+        working-directory: backend
+      - run: npm test
+        working-directory: backend
+
+  frontend-checks:
+    name: Frontend Build & E2E
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+        env:
+          VITE_CONTRACT_ID: PLACEHOLDER
+          VITE_RPC_URL: https://soroban-testnet.stellar.org:443
+          VITE_NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
+          VITE_API_URL: http://localhost:3001
+          VITE_MOCK_WALLET: "true"
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - run: npm run test:e2e
+        working-directory: frontend
+        env:
+          VITE_CONTRACT_ID: PLACEHOLDER
+          VITE_RPC_URL: https://soroban-testnet.stellar.org:443
+          VITE_NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
+          VITE_API_URL: http://localhost:3001
+          VITE_MOCK_WALLET: "true"
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
