@@ -79,6 +79,11 @@ import { createGraphQLPlaygroundSecurityMiddleware } from '../graphql.js';
 import { createApiMonitoringRoutes } from './routes/apiMonitoring.js';
 import { createIPAccessRoutes } from './routes/ipAccess.js';
 import { requestLogger } from './middleware/requestLogger.js';
+import {
+  createProblemDetailsInterceptor,
+  problemDetailsNotFoundHandler,
+  problemDetailsErrorHandler,
+} from './middleware/problemDetails.js';
 import { stitchingMetrics, getSchemaVersion, stitchingConfig } from '../graphql-stitching.js';
 
 validateEnv();
@@ -234,6 +239,10 @@ app.use((req, res, next) => {
   res.setHeader('X-Request-ID', id);
   next();
 });
+
+// Issue #519: RFC 7807 problem-details interceptor — normalizes legacy error
+// payloads from every handler into a consistent application/problem+json shape.
+app.use(createProblemDetailsInterceptor());
 
 // API request logging middleware
 app.use(requestLogger);
@@ -561,49 +570,16 @@ app.get('/graphql/stitching/info', (_req, res) => {
   });
 });
 
-// 404 handler
-app.use((_req, res) => {
-  res.status(404).json({ error: 'Not found', requestId: _req.requestId });
-});
+// 404 handler (RFC 7807)
+app.use(problemDetailsNotFoundHandler());
 
 // Sentry error handler must precede custom error handler
 if (SENTRY_DSN) {
   app.use(Sentry.Handlers.errorHandler());
 }
 
-// Generic error handler - Issue #356: prevent SQL details leakage
-app.use((err, req, res, _next) => {
-  req.log?.error({ err }, 'Unhandled error');
-
-  // Prevent SQL details from leaking to clients
-  if (err.code === 'SQL_INJECTION_BLOCKED') {
-    return res.status(403).json({
-      error: 'Invalid request',
-      requestId: req.requestId,
-      code: 'SECURITY_BLOCK',
-    });
-  }
-
-  // Mask database errors to prevent schema/information disclosure
-  if (err.code && (err.code.startsWith('SQLITE_') || err.code.startsWith('42') || err.code.startsWith('28'))) {
-    return res.status(500).json({
-      error: 'Internal server error',
-      requestId: req.requestId,
-      code: 'DATABASE_ERROR',
-    });
-  }
-
-  // Generic error - don't expose error details in production
-  const message = NODE_ENV === 'production'
-    ? 'Internal server error'
-    : err.message || 'Internal server error';
-
-  res.status(err.status || 500).json({
-    error: message,
-    requestId: req.requestId,
-    ...(NODE_ENV !== 'production' && { code: err.code }),
-  });
-});
+// Issue #519: global RFC 7807 error exception filter/interceptor.
+app.use(problemDetailsErrorHandler());
 
 /**
  * Cleanup function to close resources

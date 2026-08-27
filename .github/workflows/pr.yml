@@ -163,7 +163,7 @@ jobs:
         working-directory: contracts
 
   backend-tests:
-    name: Backend Tests
+    name: Backend Tests & Coverage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -174,8 +174,20 @@ jobs:
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
         working-directory: backend
-      - run: npm test
+      # Runs Jest with coverage (lcov + json-summary) and enforces the 80%
+      # threshold configured in backend/package.json. Fails below 80% (Issue #522).
+      - name: Run backend tests with coverage
+        run: npm run test:coverage
         working-directory: backend
+      - name: Upload backend coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@v4
+        with:
+          files: backend/coverage/lcov.info
+          flags: backend
+          name: backend-coverage
+          fail_ci_if_error: true
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   frontend-checks:
     name: Frontend Build & E2E
@@ -207,6 +219,27 @@ jobs:
           VITE_NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
           VITE_API_URL: http://localhost:3001
           VITE_MOCK_WALLET: "true"
+      # Runs Vitest unit tests with coverage (lcov + json-summary) and enforces
+      # the 80% threshold configured in frontend/vite.config.js. Fails below 80%
+      # (Issue #522).
+      - name: Run frontend unit tests with coverage
+        run: npm run test:coverage:ci
+        working-directory: frontend
+        env:
+          VITE_CONTRACT_ID: PLACEHOLDER
+          VITE_RPC_URL: https://soroban-testnet.stellar.org:443
+          VITE_NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
+          VITE_API_URL: http://localhost:3001
+          VITE_MOCK_WALLET: "true"
+      - name: Upload frontend coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@v4
+        with:
+          files: frontend/coverage/lcov.info
+          flags: frontend
+          name: frontend-coverage
+          fail_ci_if_error: true
+          token: ${{ secrets.CODECOV_TOKEN }}
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
