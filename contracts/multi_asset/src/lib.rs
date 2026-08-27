@@ -1579,6 +1579,84 @@ mod tests {
 
     #[test]
 
+    fn test_burn_and_reconstitute() {
+
+        let (env, _admin, client) = setup();
+
+        let payment_token = Address::generate(&env);
+
+        let treasury = Address::generate(&env);
+
+        let id = client.register_asset(
+            &String::from_str(&env, "Reconstitutable Asset"),
+            &AssetType::RealEstate,
+            &String::from_str(&env, "ipfs://reconstitute"),
+            &100u32,
+            &PricingModel::Fixed,
+            &50i128,
+            &payment_token,
+            &treasury,
+        );
+
+        client.activate_asset(&id);
+
+        let owner = Address::generate(&env);
+
+        soroban_sdk::token::StellarAssetClient::new(&env, &payment_token).mint(&owner, &5000i128);
+
+        client.buy_asset_shares(&id, &owner, &100);
+        client.burn_and_reconstitute(&id, &owner);
+
+        assert_eq!(client.get_asset_balance(&id, &owner), 0);
+
+        let info = client.get_asset(&id).unwrap();
+
+        assert_eq!(info.total_supply, 0);
+
+        assert_eq!(info.available_supply, 0);
+
+        assert_eq!(info.status, AssetStatus::Archived);
+
+    }
+
+
+    #[test]
+
+    #[should_panic(expected = "Error(Contract, #8)")]
+
+    fn test_burn_and_reconstitute_requires_full_supply() {
+
+        let (env, _admin, client) = setup();
+
+        let payment_token = Address::generate(&env);
+
+        let treasury = Address::generate(&env);
+
+        let id = client.register_asset(
+            &String::from_str(&env, "Partially Owned Asset"),
+            &AssetType::RealEstate,
+            &String::from_str(&env, "ipfs://partial"),
+            &100u32,
+            &PricingModel::Fixed,
+            &50i128,
+            &payment_token,
+            &treasury,
+        );
+
+        client.activate_asset(&id);
+
+        let owner = Address::generate(&env);
+
+        soroban_sdk::token::StellarAssetClient::new(&env, &payment_token).mint(&owner, &5000i128);
+
+        client.buy_asset_shares(&id, &owner, &99);
+        client.burn_and_reconstitute(&id, &owner);
+
+    }
+
+
+    #[test]
+
     fn test_transfer_asset_shares() {
 
         let (env, admin, client) = setup();
