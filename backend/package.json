@@ -11,6 +11,7 @@
     "start": "node index.js",
     "dev": "node --watch index.js",
     "test": "node --experimental-vm-modules node_modules/.bin/jest --forceExit",
+    "test:coverage": "node --experimental-vm-modules node_modules/.bin/jest --coverage --forceExit",
     "deploy": "echo 'Push to main \u2014 Render auto-deploys via render.yaml'",
     "migrate": "knex migrate:latest",
     "migrate:rollback": "knex migrate:rollback",
@@ -34,7 +35,30 @@
       "/node_modules/",
       "__tests__/setup.js"
     ],
-    "transform": {}
+    "transform": {},
+    "collectCoverage": false,
+    "collectCoverageFrom": [
+      "src/**/*.js"
+    ],
+    "coveragePathIgnorePatterns": [
+      "/node_modules/",
+      "__tests__/"
+    ],
+    "coverageReporters": [
+      "text",
+      "lcov",
+      "json-summary",
+      "html"
+    ],
+    "coverageDirectory": "coverage",
+    "coverageThreshold": {
+      "global": {
+        "lines": 80,
+        "functions": 80,
+        "branches": 80,
+        "statements": 80
+      }
+    }
   },
   "dependencies": {
     "@apollo/server": "^4.10.1",
