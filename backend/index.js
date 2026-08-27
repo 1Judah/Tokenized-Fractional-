@@ -19,6 +19,7 @@ import { setTimeout } from 'timers/promises';
 import swaggerUi from 'swagger-ui-express';
 import { swaggerSpec } from './docs.js';
 import yoga from './graphql/index.js';
+import { createETagMiddleware, invalidateLedger } from './graphql/etag.js';
 import { cacheGet, cacheSet, cacheDel } from './cache.js';
 import { RateLimiterService } from './src/services/rateLimiterService.js';
 import { AnomalyDetector } from './src/services/anomalyDetector.js';
@@ -100,6 +101,8 @@ function loadData() {
 
 function saveData(data) {
   writeFileSync(getDataFile(), JSON.stringify(data, null, 2), 'utf-8');
+  // Bump the ledger revision so GraphQL ETags are invalidated on any data change.
+  invalidateLedger();
 }
 
 export function validateContractId(id) {
@@ -1680,6 +1683,13 @@ v1.post('/notify/marketplace-status', adminAuth, (req, res) => {
 v1.get('/ws/stats', (req, res) => {
   res.json(wsManager.getStats());
 });
+
+// ── GraphQL endpoint (Issue #413: deterministic ETag caching) ────────────────
+// Mount the GraphQL Yoga server at /api/graphql. A deterministic ETag
+// middleware runs first so unchanged vault queries short-circuit to
+// `304 Not Modified`, bypassing the resolvers and data-layer reads.
+app.use('/api/graphql', createETagMiddleware({ logger }));
+app.use('/api/graphql', yoga);
 
 // Mount versioned router and backward-compatible aliases
 app.use('/api/v1', v1);
