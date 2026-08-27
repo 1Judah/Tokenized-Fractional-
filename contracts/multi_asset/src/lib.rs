@@ -358,6 +358,18 @@ pub struct EventAssetSharesTransferred {
 
 
 #[contractevent(data_format = "vec")]
+pub struct EventReconstituted {
+
+    pub asset_id: u64,
+
+    pub owner: Address,
+
+    pub burned_supply: u32,
+
+}
+
+
+#[contractevent(data_format = "vec")]
 
 pub struct EventTemplateCreated {
 
@@ -971,6 +983,51 @@ impl MultiAssetManager {
     }
 
 
+    /// Burn all fractions when one owner has acquired the complete supply and
+    /// permanently lock the asset for reconstitution.
+    pub fn burn_and_reconstitute(env: Env, asset_id: u64, owner: Address) {
+
+        owner.require_auth();
+
+        let mut info = env.storage().persistent()
+
+            .get::<DataKey, AssetInfo>(&DataKey::AssetInfo(asset_id))
+
+            .expect("Asset not found");
+
+        if info.status != AssetStatus::Active {
+
+            panic_with_error!(&env, Error::AssetArchived);
+
+        }
+
+        let balance: u32 = env.storage().persistent()
+
+            .get(&DataKey::AssetBalance(asset_id, owner.clone()))
+
+            .unwrap_or(0);
+
+        if info.available_supply != 0 || balance != info.total_supply {
+
+            panic_with_error!(&env, Error::InsufficientShares);
+
+        }
+
+        let burned_supply = info.total_supply;
+
+        env.storage().persistent().set(&DataKey::AssetBalance(asset_id, owner.clone()), &0u32);
+
+        info.total_supply = 0;
+        info.available_supply = 0;
+        info.status = AssetStatus::Archived;
+        info.updated_at = env.ledger().timestamp();
+        env.storage().persistent().set(&DataKey::AssetInfo(asset_id), &info);
+
+        EventReconstituted { asset_id, owner, burned_supply }.publish(&env);
+
+    }
+
+
     pub fn transfer_asset_shares(env: Env, asset_id: u64, from: Address, to: Address, amount: u32) {
 
         from.require_auth();
@@ -1516,6 +1573,84 @@ mod tests {
         assert_eq!(analytics.buy_count, 1);
 
         assert!(analytics.total_volume > 0);
+
+    }
+
+
+    #[test]
+
+    fn test_burn_and_reconstitute() {
+
+        let (env, _admin, client) = setup();
+
+        let payment_token = Address::generate(&env);
+
+        let treasury = Address::generate(&env);
+
+        let id = client.register_asset(
+            &String::from_str(&env, "Reconstitutable Asset"),
+            &AssetType::RealEstate,
+            &String::from_str(&env, "ipfs://reconstitute"),
+            &100u32,
+            &PricingModel::Fixed,
+            &50i128,
+            &payment_token,
+            &treasury,
+        );
+
+        client.activate_asset(&id);
+
+        let owner = Address::generate(&env);
+
+        soroban_sdk::token::StellarAssetClient::new(&env, &payment_token).mint(&owner, &5000i128);
+
+        client.buy_asset_shares(&id, &owner, &100);
+        client.burn_and_reconstitute(&id, &owner);
+
+        assert_eq!(client.get_asset_balance(&id, &owner), 0);
+
+        let info = client.get_asset(&id).unwrap();
+
+        assert_eq!(info.total_supply, 0);
+
+        assert_eq!(info.available_supply, 0);
+
+        assert_eq!(info.status, AssetStatus::Archived);
+
+    }
+
+
+    #[test]
+
+    #[should_panic(expected = "Error(Contract, #8)")]
+
+    fn test_burn_and_reconstitute_requires_full_supply() {
+
+        let (env, _admin, client) = setup();
+
+        let payment_token = Address::generate(&env);
+
+        let treasury = Address::generate(&env);
+
+        let id = client.register_asset(
+            &String::from_str(&env, "Partially Owned Asset"),
+            &AssetType::RealEstate,
+            &String::from_str(&env, "ipfs://partial"),
+            &100u32,
+            &PricingModel::Fixed,
+            &50i128,
+            &payment_token,
+            &treasury,
+        );
+
+        client.activate_asset(&id);
+
+        let owner = Address::generate(&env);
+
+        soroban_sdk::token::StellarAssetClient::new(&env, &payment_token).mint(&owner, &5000i128);
+
+        client.buy_asset_shares(&id, &owner, &99);
+        client.burn_and_reconstitute(&id, &owner);
 
     }
 
