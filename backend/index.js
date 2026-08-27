@@ -231,6 +231,42 @@ function isApproved(asset) {
   return !asset.status || asset.status === ASSET_STATUS.APPROVED;
 }
 
+function escapeXml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function getPublicSiteUrl(req) {
+  return (process.env.PUBLIC_SITE_URL || process.env.SITE_URL || `${req.protocol}://${req.get('host')}`)
+    .replace(/\/$/, '');
+}
+
+function buildSitemap(req) {
+  const data = loadData();
+  const updatedAt = new Date().toISOString();
+  const urls = [
+    `    <url><loc>${escapeXml(`${getPublicSiteUrl(req)}/`)}</loc><lastmod>${updatedAt}</lastmod><changefreq>daily</changefreq><priority>1.0</priority></url>`,
+    ...Object.entries(data)
+      .filter(([, meta]) => isApproved(meta))
+      .map(([contractId, meta]) => {
+        const lastmod = new Date(meta.updatedAt || meta.createdAt || updatedAt).toISOString();
+        const loc = `${getPublicSiteUrl(req)}/asset/${encodeURIComponent(contractId)}`;
+        return `    <url><loc>${escapeXml(loc)}</loc><lastmod>${lastmod}</lastmod><changefreq>daily</changefreq><priority>0.8</priority></url>`;
+      }),
+  ];
+
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+    ...urls,
+    '</urlset>',
+  ].join('\n');
+}
+
 // ── Webhook helpers ────────────────────────────────────────────────────────────
 const WEBHOOK_EVENTS = {
   CREATED: 'asset.created',
@@ -503,6 +539,15 @@ const writeLimiter = async (req, res, next) => {
 };
 
 // ── Routes ────────────────────────────────────────────────────────────────────
+
+// Public sitemap is generated from the current approved asset metadata.
+app.get('/sitemap.xml', (req, res) => {
+  res.set({
+    'Cache-Control': 'public, max-age=86400, s-maxage=86400',
+    'Content-Type': 'application/xml; charset=utf-8',
+  });
+  res.send(buildSitemap(req));
+});
 
 /**
  * @openapi
