@@ -29,6 +29,11 @@ import { createRateLimiter } from './src/middleware/rateLimiter.js';
 import { createRateLimitAdminRoutes } from './src/routes/rateLimitAdmin.js';
 import { applyCursorPagination, CursorError, paginationErrorHandler, SORT_FIELDS } from './src/services/cursorPagination.js';
 import { parsePaginationParams } from './src/middleware/cursorPagination.js';
+import {
+  createProblemDetailsInterceptor,
+  problemDetailsNotFoundHandler,
+  problemDetailsErrorHandler,
+} from './src/middleware/problemDetails.js';
 import swaggerUi from 'swagger-ui-express';
 import { generateOpenapiSpec } from './src/services/openapiService.js';
 import { getDatabase } from './src/services/database.js';
@@ -379,6 +384,10 @@ app.use((req, res, next) => {
   res.setHeader('X-Request-ID', id);
   next();
 });
+
+// Issue #519: RFC 7807 problem-details interceptor — normalizes legacy error
+// payloads from every handler into a consistent application/problem+json shape.
+app.use(createProblemDetailsInterceptor());
 
 // Validation middleware — comprehensive schema validation for all API endpoints (#260)
 // Disabled in test mode to avoid breaking existing tests
@@ -1681,19 +1690,14 @@ const batchHandler = createBatchHandler(app, { logger });
 app.post('/api/batch', batchHandler);
 app.post('/api/v1/batch', batchHandler);
 
-app.use((_req, res) => {
-  res.status(404).json({ error: 'Not found', requestId: _req.requestId });
-});
+app.use(problemDetailsNotFoundHandler());
 
 // Sentry error handler must be registered before other error handlers
 if (process.env.SENTRY_DSN) {
   app.use(Sentry.Handlers.errorHandler());
 }
 
-app.use((err, req, res, _next) => {
-  req.log?.error({ err }, 'Unhandled error');
-  res.status(500).json({ error: 'Internal server error', requestId: req.requestId });
-});
+app.use(problemDetailsErrorHandler());
 
 export { app, rateLimiterService, rateLimitAnalytics, anomalyDetector, geoLimiter, billingService };
 
