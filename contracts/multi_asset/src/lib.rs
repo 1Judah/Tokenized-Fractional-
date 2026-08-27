@@ -358,6 +358,18 @@ pub struct EventAssetSharesTransferred {
 
 
 #[contractevent(data_format = "vec")]
+pub struct EventReconstituted {
+
+    pub asset_id: u64,
+
+    pub owner: Address,
+
+    pub burned_supply: u32,
+
+}
+
+
+#[contractevent(data_format = "vec")]
 
 pub struct EventTemplateCreated {
 
@@ -967,6 +979,51 @@ impl MultiAssetManager {
             .get(&DataKey::AssetBalance(asset_id, owner))
 
             .unwrap_or(0)
+
+    }
+
+
+    /// Burn all fractions when one owner has acquired the complete supply and
+    /// permanently lock the asset for reconstitution.
+    pub fn burn_and_reconstitute(env: Env, asset_id: u64, owner: Address) {
+
+        owner.require_auth();
+
+        let mut info = env.storage().persistent()
+
+            .get::<DataKey, AssetInfo>(&DataKey::AssetInfo(asset_id))
+
+            .expect("Asset not found");
+
+        if info.status != AssetStatus::Active {
+
+            panic_with_error!(&env, Error::AssetArchived);
+
+        }
+
+        let balance: u32 = env.storage().persistent()
+
+            .get(&DataKey::AssetBalance(asset_id, owner.clone()))
+
+            .unwrap_or(0);
+
+        if info.available_supply != 0 || balance != info.total_supply {
+
+            panic_with_error!(&env, Error::InsufficientShares);
+
+        }
+
+        let burned_supply = info.total_supply;
+
+        env.storage().persistent().set(&DataKey::AssetBalance(asset_id, owner.clone()), &0u32);
+
+        info.total_supply = 0;
+        info.available_supply = 0;
+        info.status = AssetStatus::Archived;
+        info.updated_at = env.ledger().timestamp();
+        env.storage().persistent().set(&DataKey::AssetInfo(asset_id), &info);
+
+        EventReconstituted { asset_id, owner, burned_supply }.publish(&env);
 
     }
 
