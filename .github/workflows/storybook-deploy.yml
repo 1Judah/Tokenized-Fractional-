@@ -1,0 +1,76 @@
+# Issue #521: Set up Storybook for UI component library.
+# Builds the Storybook static site and deploys it to GitHub Pages.
+# - On PRs: builds the site, uploads a pull-request preview, and comments the URL.
+# - On push to main: deploys the latest Storybook as the production Pages site.
+name: Storybook
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - '.storybook/**'
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - '.storybook/**'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  group: storybook-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    name: Build & Deploy Storybook
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build Storybook
+        working-directory: frontend
+        run: npm run build-storybook
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/storybook-static
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Comment preview URL on PR
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: storybook
+          message: |
+            ## 📚 Storybook Preview
+
+            The Storybook site for this PR is available at:
+
+            **${{ steps.deployment.outputs.page_url }}**
+
+            Branch: `${{ github.head_ref }}`
