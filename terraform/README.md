@@ -10,6 +10,49 @@ Defines AWS infrastructure using Terraform for reproducible deployments.
 - **RDS PostgreSQL** — Managed PostgreSQL 16 with automated backups
 - **EC2** — Backend API server with auto-start via systemd
 - **Elastic IP** — Static public IP for the backend
+- **DynamoDB** — State-lock table for the S3 backend (Issue #571)
+
+## State Locking (Issue #571)
+
+Terraform state is stored in an S3 bucket and **locked with DynamoDB** so that
+concurrent `plan`/`apply` runs from different machines or CI jobs cannot
+corrupt the shared state. Locking is enforced by:
+
+- `aws_dynamodb_table.terraform_locks` in [`state-lock.tf`](./state-lock.tf) —
+  an on-demand (`PAY_PER_REQUEST`) table named `rwa-marketplace-terraform-locks`
+  with a `LockID` string hash key (the schema Terraform expects).
+- `dynamodb_table = "rwa-marketplace-terraform-locks"` in
+  [`backend.tf`](./backend.tf), which tells the S3 backend to acquire a lock
+  in that table on every state operation.
+
+### Bootstrap (first run only)
+
+The DynamoDB lock table is itself defined in the Terraform config, so it must
+be created before the S3 backend can use it. Do this once per AWS account:
+
+```bash
+# 1. Initialize with a temporary local backend so we can create the table
+terraform init -backend=false
+
+# 2. Create only the DynamoDB lock table (needs AWS credentials)
+terraform apply -target=aws_dynamodb_table.terraform_locks -auto-approve
+
+# 3. Re-initialize with the real S3 + DynamoDB backend
+terraform init \
+  -backend-config="bucket=rwa-marketplace-terraform-state" \
+  -backend-config="key=rwa-marketplace/staging/terraform.tfstate" \
+  -backend-config="region=us-east-1" \
+  -reconfigure
+```
+
+> **Note:** the S3 bucket itself (`rwa-marketplace-terraform-state`) is
+> provisioned out-of-band (console or a small bootstrap config) since the
+> backend cannot reference resources it manages.
+
+From then on, every `terraform plan` / `terraform apply` automatically takes a
+lock on the DynamoDB table. If another run holds the lock you will see
+`Error: Error acquiring the state lock` — wait for it to finish or remove a
+stale lock entry manually from the `LockID` column.
 
 ## Usage
 
@@ -21,14 +64,14 @@ Defines AWS infrastructure using Terraform for reproducible deployments.
 ### Quick Start
 
 ```bash
-# Initialize with S3 backend (recommended for teams)
+# Initialize with S3 backend (recommended for teams) — enables state locking
 terraform init \
   -backend-config="bucket=rwa-marketplace-terraform-state" \
   -backend-config="key=rwa-marketplace/staging/terraform.tfstate" \
   -backend-config="region=us-east-1"
 
-# Or use local state (single developer)
-terraform init
+# Or use local state (single developer, no locking)
+terraform init -backend=false
 ```
 
 ```bash
@@ -68,7 +111,7 @@ After apply, key outputs are printed:
 
 ## Production Checklist
 
-1. Configure S3 backend with DynamoDB locking
+1. S3 backend with DynamoDB state locking is configured (see above)
 2. Set `deletion_protection = true` on RDS
 3. Use a CI/CD pipeline (GitHub Actions) for `terraform plan/apply`
 4. Store secrets in AWS Secrets Manager or Parameter Store

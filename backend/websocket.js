@@ -5,8 +5,9 @@
  */
 
 import { WebSocketServer } from 'ws';
-import { logger } from './index.js';
+import { logger } from './src/services/logger.js';
 import { websocketDLQService } from './src/services/websocketDLQService.js';
+import { WebSocketRedisAdapter } from './websocketRedisAdapter.js';
 
 /**
  * Event types for WebSocket communication
@@ -34,6 +35,7 @@ export class WebSocketManager {
     this.clients = new Map(); // Map of clientId -> { ws, subscriptions: Set, lastSeqId: Map }
     this.subscriptions = new Map(); // Map of topic -> Set of clientIds
     this.clientLastSeqId = new Map(); // Map of clientId -> Map<channel, lastSeqId>
+    this.redisAdapter = null; // Optional Redis Pub/Sub adapter (Issue #593)
   }
 
   /**
@@ -229,13 +231,17 @@ export class WebSocketManager {
 
   /**
    * Broadcast event to all clients subscribed to a topic
-   * Enhanced with sequence numbers and DLQ integration
+   * Enhanced with sequence numbers and DLQ integration.
+   *
+   * Issue #593: when a Redis Pub/Sub adapter is attached, the message is also
+   * fanned out to every other backend instance so clients connected to any
+   * horizontal node receive it.
    */
   async broadcast(topic, event) {
     const subscribers = this.subscriptions.get(topic);
-    if (!subscribers || subscribers.size === 0) return;
 
-    // Assign sequence number for this broadcast
+    // Assign sequence number for this broadcast (even with zero local
+    // subscribers, so the Redis fan-out still carries a seqId)
     const seqId = websocketDLQService.getNextSequenceNumber(topic);
 
     const message = JSON.stringify({
@@ -245,6 +251,15 @@ export class WebSocketManager {
       seqId,
       timestamp: new Date().toISOString(),
     });
+
+    // Fan the broadcast out to other instances through Redis Pub/Sub. This
+    // must happen even when this instance has no local subscribers, because
+    // another instance might.
+    if (this.redisAdapter) {
+      this.redisAdapter.publish(topic, message);
+    }
+
+    if (!subscribers || subscribers.size === 0) return;
 
     // Store message in DLQ
     await websocketDLQService.storeMessage(topic, { type: event.type, data: event.data }, seqId);
@@ -277,6 +292,64 @@ export class WebSocketManager {
       { topic, seqId, subscriberCount: subscribers.size, sentCount: subscribers.size - failedClients.length },
       'Event broadcasted with sequence number'
     );
+  }
+
+  /**
+   * Deliver a broadcast that originated on another instance (received via the
+   * Redis Pub/Sub adapter, Issue #593). The payload is the fully serialized
+   * message produced by the origin instance, so we only forward it to local
+   * subscribers — never re-publish it.
+   */
+  handleRemoteBroadcast(topic, message) {
+    const subscribers = this.subscriptions.get(topic);
+    if (!subscribers || subscribers.size === 0) return;
+
+    let parsed = message;
+    if (typeof parsed === 'string') {
+      try {
+        parsed = JSON.parse(parsed);
+      } catch (error) {
+        logger.error({ error: error.message, topic }, 'Failed to parse remote WebSocket message');
+        return;
+      }
+    }
+
+    const failedClients = [];
+
+    for (const clientId of subscribers) {
+      const client = this.clients.get(clientId);
+      if (client && client.ws.readyState === 1) { // WebSocket.OPEN
+        try {
+          client.ws.send(JSON.stringify(parsed));
+
+          // Track the origin instance's sequence number for this topic
+          const clientSeqIds = this.clientLastSeqId.get(clientId);
+          if (clientSeqIds && parsed.seqId != null) {
+            clientSeqIds.set(topic, parsed.seqId);
+          }
+        } catch (error) {
+          logger.error({ clientId, error: error.message }, 'Failed to send remote WebSocket message');
+          failedClients.push(clientId);
+        }
+      }
+    }
+
+    failedClients.forEach(clientId => this.handleDisconnect(clientId));
+  }
+
+  /**
+   * Attach the Redis Pub/Sub adapter for cross-instance broadcasting
+   * (Issue #593). Safe to call when Redis is unavailable — the adapter
+   * disables itself and the manager keeps working in single-node mode.
+   *
+   * @param {Object} [options] - Overrides for { redisUrl, channel, instanceId }
+   * @returns {Promise<WebSocketRedisAdapter|null>}
+   */
+  async connectRedisAdapter(options = {}) {
+    if (process.env.REDIS_DISABLE_PUBSUB === 'true') return null;
+    this.redisAdapter = new WebSocketRedisAdapter(this, options);
+    await this.redisAdapter.connect();
+    return this.redisAdapter;
   }
 
   /**
@@ -387,6 +460,7 @@ export class WebSocketManager {
         (sum, set) => sum + set.size,
         0
       ),
+      redisConnected: this.redisAdapter ? this.redisAdapter.connected : false,
     };
   }
 
@@ -400,7 +474,11 @@ export class WebSocketManager {
   /**
    * Close WebSocket server
    */
-  close() {
+  async close() {
+    if (this.redisAdapter) {
+      await this.redisAdapter.close();
+      this.redisAdapter = null;
+    }
     if (this.wss) {
       this.wss.close();
       logger.info('WebSocket server closed');
