@@ -47,11 +47,22 @@
   gap: 0.5rem;
 }
 
+/* Scrollable, padded wrapper for the virtualized lists (Issue #594). */
+.virtualList {
+  border: 1px solid var(--color-border, #2a3041);
+  border-radius: 8px;
+  margin-bottom: 0.25rem;
+}
+
+/* The VirtualList positions each row absolutely; rows fill their slot. */
 .orderRow {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.75rem 1rem;
+  padding: 0 1rem;
+  margin: 0 0.5rem 0.5rem;
+  height: 48px;
+  box-sizing: border-box;
   background: var(--color-bg-secondary);
   border-radius: 8px;
   border-left: 3px solid transparent;

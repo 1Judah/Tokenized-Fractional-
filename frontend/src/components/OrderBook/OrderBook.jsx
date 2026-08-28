@@ -2,16 +2,24 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * src/components/OrderBook/OrderBook.jsx — Order book with optimistic pending orders.
+ * src/components/OrderBook/OrderBook.jsx — Order book with DOM virtualization.
  *
  * Displays buy/sell orders with pulsing badge for pending transactions.
+ *
+ * Issue #594: Use the project's existing VirtualList component so only the
+ * visible rows are rendered. This keeps scrolling smooth at 60fps even when
+ * the order book contains thousands of bids/asks.
  */
 
 import React from 'react';
 import { useQuery } from '@apollo/client';
 import { GET_ORDER_BOOK } from '../../graphql/queries';
 import Card from '../Card/Card';
+import VirtualList from '../VirtualList/VirtualList';
 import styles from './OrderBook.module.css';
+
+const ORDER_ROW_HEIGHT = 56;
+const ORDER_LIST_HEIGHT = 420;
 
 export default function OrderBook({ assetId }) {
   const { data, loading, error } = useQuery(GET_ORDER_BOOK, {
@@ -49,11 +57,17 @@ export default function OrderBook({ assetId }) {
         {buyOrders.length === 0 ? (
           <div className={styles.empty}>No buy orders</div>
         ) : (
-          <div className={styles.orderList}>
-            {buyOrders.map((order) => (
-              <OrderRow key={order.id} order={order} type="buy" />
-            ))}
-          </div>
+          <VirtualList
+            items={buyOrders}
+            itemHeight={ORDER_ROW_HEIGHT}
+            height={ORDER_LIST_HEIGHT}
+            className={styles.virtualList}
+            overscan={6}
+            variableHeight={false}
+            keyExtractor={(order) => order.id}
+            renderItem={({ item }) => <OrderRow order={item} type="buy" />}
+            aria-label="Buy order book"
+          />
         )}
       </div>
 
@@ -63,11 +77,17 @@ export default function OrderBook({ assetId }) {
         {sellOrders.length === 0 ? (
           <div className={styles.empty}>No sell orders</div>
         ) : (
-          <div className={styles.orderList}>
-            {sellOrders.map((order) => (
-              <OrderRow key={order.id} order={order} type="sell" />
-            ))}
-          </div>
+          <VirtualList
+            items={sellOrders}
+            itemHeight={ORDER_ROW_HEIGHT}
+            height={ORDER_LIST_HEIGHT}
+            className={styles.virtualList}
+            overscan={6}
+            variableHeight={false}
+            keyExtractor={(order) => order.id}
+            renderItem={({ item }) => <OrderRow order={item} type="sell" />}
+            aria-label="Sell order book"
+          />
         )}
       </div>
     </Card>
