@@ -47,6 +47,8 @@ pub enum DataKey {
     TotalShares,
     AvailableShares,
     Paused,
+    /// Permanent delisting flag set by admins (Issue #570).
+    Delisted,
     Balance(Address),
     VestingSchedules(Address),
     Holders,
@@ -306,6 +308,16 @@ pub struct EventPause {}
 
 #[contractevent]
 pub struct EventUnpause {}
+
+/// Emitted when an asset is permanently delisted by the multi-sig admin role
+/// (Issue #570). Carries the number of open sell orders that were cancelled
+/// so off-chain indexers can reconcile the order book.
+#[contractevent(data_format = "vec")]
+pub struct EventAssetDelisted {
+    pub reason: soroban_sdk::Bytes,
+    pub cancelled_orders: u32,
+    pub timestamp: u64,
+}
 
 #[contractevent(data_format = "vec")]
 pub struct EventEmergencyWithdraw {
@@ -1577,6 +1589,73 @@ impl RwaMarketplace {
         admin.require_auth();
         env.storage().instance().set(&DataKey::Paused, &false);
         EventUnpause {}.publish(&env);
+    }
+
+    // ── Issue #570: Emergency Asset Delisting ─────────────────────────────
+
+    /// Check whether the asset has been permanently delisted.
+    pub fn is_delisted(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Delisted)
+            .unwrap_or(false)
+    }
+
+    /// Permanently delist the asset and halt all trading immediately.
+    ///
+    /// Requires the multi-sig admin role. This is destructive and irreversible:
+    /// it sets the global pause flag so no buys/sells/transfers can execute, then
+    /// cancels every open sell order in the order book, returning the escrowed
+    /// shares to each seller so they can withdraw their frozen funds.
+    ///
+    /// Called directly by admins or via the guarded timelock operation
+    /// (`AdminAction::DelistAsset`) which enforces multi-sig approval.
+    pub fn delist_asset(env: Env, reason: soroban_sdk::Bytes) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin)
+            .expect("Contract not initialized: admin");
+        admin.require_auth();
+
+        if env.storage().instance().get(&DataKey::Delisted).unwrap_or(false) {
+            panic!("Asset is already delisted");
+        }
+
+        // Halt all trading immediately.
+        env.storage().instance().set(&DataKey::Paused, &true);
+        env.storage().instance().set(&DataKey::Delisted, &true);
+
+        // Cancel every open sell order and return escrowed shares to sellers.
+        let mut cancelled: u32 = 0;
+        let order_count: u64 = env.storage().instance()
+            .get(&DataKey::NextOrderId)
+            .unwrap_or(0);
+        let mut order_id: u64 = 0;
+        while order_id < order_count {
+            if let Some(order) = env.storage()
+                .persistent()
+                .get::<DataKey, SellOrder>(&DataKey::SellOrder(order_id))
+            {
+                // Return escrowed shares so sellers can withdraw frozen funds.
+                let balance: u32 = env.storage()
+                    .persistent()
+                    .get(&DataKey::Balance(order.seller.clone()))
+                    .unwrap_or(0);
+                env.storage().persistent().set(
+                    &DataKey::Balance(order.seller.clone()),
+                    &checked_add_u32(balance, order.amount),
+                );
+                env.storage().persistent().remove(&DataKey::SellOrder(order_id));
+                EventOrderCancelled { order_id, seller: order.seller }.publish(&env);
+                cancelled += 1;
+            }
+            order_id += 1;
+        }
+
+        EventAssetDelisted {
+            reason,
+            cancelled_orders: cancelled,
+            timestamp: env.ledger().timestamp(),
+        }
+        .publish(&env);
     }
 
     pub fn emergency_withdraw(env: Env, to: Address, amount: i128) {
@@ -5758,6 +5837,9 @@ pub enum AdminAction {
     Pause,
     Unpause,
     EmergencyWithdraw(soroban_sdk::Address, i128),
+    /// Permanent emergency asset delisting (Issue #570), restricted to the
+    /// multi-sig / timelock-guarded admin flow.
+    DelistAsset(soroban_sdk::Bytes),
 }
 
 #[soroban_sdk::contracttype]
@@ -5829,6 +5911,9 @@ impl RwaMarketplace {
             },
             AdminAction::EmergencyWithdraw(to, amount) => {
                 RwaMarketplace::emergency_withdraw(env.clone(), to, amount);
+            },
+            AdminAction::DelistAsset(reason) => {
+                RwaMarketplace::delist_asset(env.clone(), reason);
             }
         }
 
@@ -7160,5 +7245,49 @@ mod sip4_metadata_tests {
         mint(&te, &te.contract_id, 50_000);
         c.pause();
         c.buyback_shares(&te.buyer, &10);
+    }
+
+    // ── Issue #570: Emergency Asset Delisting ─────────────────────────────
+
+    #[test]
+    fn test_delist_asset_halts_trading_and_cancels_orders() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
+        c.buy_shares(&te.buyer, &50, &te.token_id);
+
+        // Open two sell orders escrowing 20 + 5 = 25 shares.
+        c.place_sell_order(&te.buyer, &20, &150);
+        c.place_sell_order(&te.buyer, &5, &100);
+
+        // Sanity: orders exist and escrow held back 25 shares.
+        assert!(c.get_sell_order(&0).is_some());
+        assert!(c.get_sell_order(&1).is_some());
+        assert_eq!(c.get_shares(&te.buyer), 25);
+
+        let reason = soroban_sdk::Bytes::from_slice(&te.env, b"legal-dispute");
+        c.delist_asset(&reason);
+
+        // Trading halted and marked permanently delisted.
+        assert_eq!(c.is_delisted(), true);
+        assert_eq!(c.is_paused(), true);
+
+        // All open orders cancelled and escrowed shares returned to the seller.
+        assert!(c.get_sell_order(&0).is_none());
+        assert!(c.get_sell_order(&1).is_none());
+        assert_eq!(c.get_shares(&te.buyer), 50);
+    }
+
+    #[test]
+    #[should_panic(expected = "Asset is already delisted")]
+    fn test_delist_asset_is_irreversible() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        let reason = soroban_sdk::Bytes::from_slice(&te.env, b"legal-dispute");
+        c.delist_asset(&reason);
+        c.delist_asset(&reason);
     }
 }
