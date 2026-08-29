@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, contractevent, symbol_short, Address, Env, String, Vec, BytesN, panic_with_error};
+use soroban_sdk::{contract, contractimpl, contracterror, contracttype, contractevent, symbol_short, Address, Env, String, Vec, BytesN, panic_with_error};
 
 
 // -- Error Codes --------------------------------------------------
@@ -40,6 +40,12 @@ pub enum Error {
     NameTooLong = 14,
 
     TreasuryNotSet = 15,
+
+    InvalidCuratorSet = 16,
+
+    InsufficientApprovals = 17,
+
+    NotACurator = 18,
 
 }
 
@@ -252,6 +258,8 @@ pub enum DataKey {
 
     OracleAddress,
 
+    Curators,
+
 }
 
 
@@ -382,23 +390,23 @@ pub struct EventTemplateCreated {
 
 // -- Helper Functions ---------------------------------------------
 
-fn checked_add_u32(a: u32, b: u32) -> u32 {
+fn checked_add_u32(env: &Env, a: u32, b: u32) -> u32 {
 
-    a.checked_add(b).unwrap_or_else(|| panic_with_error!(&Map::new(&Default::default()), Error::InvalidAmount))
-
-}
-
-
-fn checked_sub_u32(a: u32, b: u32) -> u32 {
-
-    a.checked_sub(b).unwrap_or_else(|| panic_with_error!(&Map::new(&Default::default()), Error::InvalidAmount))
+    a.checked_add(b).unwrap_or_else(|| panic_with_error!(env, Error::InvalidAmount))
 
 }
 
 
-fn checked_mul_i128(a: i128, b: i128) -> i128 {
+fn checked_sub_u32(env: &Env, a: u32, b: u32) -> u32 {
 
-    a.checked_mul(b).unwrap_or_else(|| panic_with_error!(&Map::new(&Default::default()), Error::InvalidAmount))
+    a.checked_sub(b).unwrap_or_else(|| panic_with_error!(env, Error::InvalidAmount))
+
+}
+
+
+fn checked_mul_i128(env: &Env, a: i128, b: i128) -> i128 {
+
+    a.checked_mul(b).unwrap_or_else(|| panic_with_error!(env, Error::InvalidAmount))
 
 }
 
@@ -453,6 +461,169 @@ impl MultiAssetManager {
     }
 
 
+    // -- Multi-Sig Curators (Issue #595) -------------------------
+
+    /// Designate the curator set used for the 2-of-3 minting approval
+
+    /// workflow. Requires exactly three unique addresses; only the admin
+
+    /// may change the set.
+
+    pub fn set_curators(env: Env, curators: Vec<Address>) {
+
+        let admin: Address = Self::get_admin(env.clone());
+
+        admin.require_auth();
+
+
+        if curators.len() != 3 {
+
+            panic_with_error!(&env, Error::InvalidCuratorSet);
+
+        }
+
+
+        // The 2-of-3 threshold is only meaningful if the three curators
+
+        // are distinct addresses.
+
+        let mut seen = Vec::<Address>::new(&env);
+
+        for curator in curators.iter() {
+
+            let mut duplicate = false;
+
+            for existing in seen.iter() {
+
+                if existing == curator {
+
+                    duplicate = true;
+
+                    break;
+
+                }
+
+            }
+
+            if duplicate {
+
+                panic_with_error!(&env, Error::InvalidCuratorSet);
+
+            }
+
+            seen.push_back(curator.clone());
+
+        }
+
+
+        env.storage().instance().set(&DataKey::Curators, &curators);
+
+    }
+
+
+    pub fn get_curators(env: Env) -> Vec<Address> {
+
+        env.storage().instance().get(&DataKey::Curators)
+
+            .expect("Curators not configured: call set_curators first")
+
+    }
+
+
+    /// Enforce the 2-of-3 multi-sig approval requirement for minting a new
+
+    /// fractional asset. Every address in `approvers` must be a designated
+
+    /// curator and must authorize the invocation (Soroban `require_auth`),
+
+    /// and at least two distinct curators must approve. This rejects
+
+    /// single-signature minting attempts before any asset is created.
+
+    fn require_multisig_approval(env: &Env, approvers: &Vec<Address>) {
+
+        let curators: Vec<Address> = env.storage().instance()
+
+            .get(&DataKey::Curators)
+
+            .expect("Curators not configured: call set_curators first");
+
+
+        let mut distinct = Vec::<Address>::new(env);
+
+        for approver in approvers.iter() {
+
+            // Every signer must be a designated curator.
+
+            let mut is_curator = false;
+
+            for curator in curators.iter() {
+
+                if curator == approver {
+
+                    is_curator = true;
+
+                    break;
+
+                }
+
+            }
+
+            if !is_curator {
+
+                panic_with_error!(env, Error::NotACurator);
+
+            }
+
+
+            // A single signer cannot satisfy the threshold twice, and
+
+            // `require_auth` may only be invoked once per address per
+
+            // invocation frame.
+
+            let mut already_seen = false;
+
+            for existing in distinct.iter() {
+
+                if existing == approver {
+
+                    already_seen = true;
+
+                    break;
+
+                }
+
+            }
+
+            if already_seen {
+
+                continue;
+
+            }
+
+
+            distinct.push_back(approver.clone());
+
+
+            // Require Soroban authorization from this curator so the
+
+            // transaction must carry their signature.
+
+            approver.require_auth();
+
+        }
+
+
+        if distinct.len() < 2 {
+
+            panic_with_error!(env, Error::InsufficientApprovals);
+
+        }
+
+    }
+
+
     // -- Asset Registration --------------------------------------
 
     pub fn register_asset(
@@ -475,11 +646,20 @@ impl MultiAssetManager {
 
         treasury: Address,
 
+        approvers: Vec<Address>,
+
     ) -> u64 {
 
         let admin: Address = Self::get_admin(env.clone());
 
         admin.require_auth();
+
+
+        // Multi-sig approval (Issue #595): at least 2-of-3 designated
+
+        // curators must sign off before the fractional asset is minted.
+
+        Self::require_multisig_approval(&env, &approvers);
 
 
         if total_supply == 0 {
@@ -883,7 +1063,7 @@ impl MultiAssetManager {
             .expect("Pricing not found");
 
 
-        let total_cost = checked_mul_i128(pricing.fixed_price, amount as i128);
+        let total_cost = checked_mul_i128(&env, pricing.fixed_price, amount as i128);
 
 
         // Transfer payment from buyer to treasury
@@ -897,7 +1077,7 @@ impl MultiAssetManager {
 
         let mut updated_info = info.clone();
 
-        updated_info.available_supply = checked_sub_u32(updated_info.available_supply, amount);
+        updated_info.available_supply = checked_sub_u32(&env, updated_info.available_supply, amount);
 
         env.storage().persistent().set(&DataKey::AssetInfo(asset_id), &updated_info);
 
@@ -910,7 +1090,7 @@ impl MultiAssetManager {
 
             .unwrap_or(0);
 
-        let new_balance = checked_add_u32(prev_balance, amount);
+        let new_balance = checked_add_u32(&env, prev_balance, amount);
 
         env.storage().persistent().set(&DataKey::AssetBalance(asset_id, buyer.clone()), &new_balance);
 
@@ -1096,7 +1276,7 @@ impl MultiAssetManager {
         }
 
 
-        let new_from = checked_sub_u32(from_balance, amount);
+        let new_from = checked_sub_u32(&env, from_balance, amount);
 
         let to_balance: u32 = env.storage().persistent()
 
@@ -1104,7 +1284,7 @@ impl MultiAssetManager {
 
             .unwrap_or(0);
 
-        let new_to = checked_add_u32(to_balance, amount);
+        let new_to = checked_add_u32(&env, to_balance, amount);
 
 
         env.storage().persistent().set(&DataKey::AssetBalance(asset_id, from.clone()), &new_from);
@@ -1257,12 +1437,21 @@ mod tests {
 
     use super::*;
 
-    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::Address as _;    // `#![no_std]` crate: link `std` in the test build so `format!` works.
+
+    extern crate std;
+
+    use std::format;
 
 
-    fn setup() -> (Env, Address, MultiAssetManagerClient) {
+    fn setup() -> (Env, Address, MultiAssetManagerClient<'static>) {
 
         let env = Env::default();
+
+        // Admin-only functions call `require_auth`; the test env must mock
+        // authorization the same way the main contract's tests do.
+
+        env.mock_all_auths();
 
         let admin = Address::generate(&env);
 
@@ -1277,11 +1466,51 @@ mod tests {
     }
 
 
+    /// Build a `Vec<Address>` of approvers for the 2-of-3 multi-sig check.
+
+    fn approval_vec(env: &Env, addresses: &[&Address]) -> Vec<Address> {
+
+        let mut result = Vec::new(env);
+
+        for address in addresses {
+
+            result.push_back((*address).clone());
+
+        }
+
+        result
+
+    }
+
+
+    /// `setup()` plus the three designated curators required by the
+
+    /// multi-sig minting workflow (Issue #595).
+
+    fn setup_with_curators() -> (Env, Address, MultiAssetManagerClient<'static>, Address, Address, Address) {
+
+        let (env, admin, client) = setup();
+
+        let c1 = Address::generate(&env);
+
+        let c2 = Address::generate(&env);
+
+        let c3 = Address::generate(&env);
+
+        let curators = approval_vec(&env, &[&c1, &c2, &c3]);
+
+        client.set_curators(&curators);
+
+        (env, admin, client, c1, c2, c3)
+
+    }
+
+
     #[test]
 
     fn test_init() {
 
-        let (env, admin, client) = setup();
+        let (env, admin, client, c1, c2, _c3) = setup_with_curators();
 
         assert!(client.is_initialized());
 
@@ -1300,6 +1529,8 @@ mod tests {
 
         let env = Env::default();
 
+        env.mock_all_auths();
+
         let admin = Address::generate(&env);
 
         let contract_id = env.register(MultiAssetManager, ());
@@ -1317,7 +1548,7 @@ mod tests {
 
     fn test_register_and_query_asset() {
 
-        let (env, admin, client) = setup();
+        let (env, admin, client, c1, c2, _c3) = setup_with_curators();
 
         let payment_token = Address::generate(&env);
 
@@ -1332,6 +1563,8 @@ mod tests {
 
         let pricing_model = PricingModel::Fixed;
 
+
+        let approvers = approval_vec(&env, &[&c1, &c2]);
 
         let asset_id = client.register_asset(
 
@@ -1350,6 +1583,8 @@ mod tests {
             &payment_token,
 
             &treasury,
+
+            &approvers,
 
         );
 
@@ -1383,7 +1618,7 @@ mod tests {
 
     fn test_register_multiple_assets() {
 
-        let (env, admin, client) = setup();
+        let (env, admin, client, c1, c2, _c3) = setup_with_curators();
 
         let payment_token = Address::generate(&env);
 
@@ -1395,6 +1630,8 @@ mod tests {
             let name = String::from_str(&env, &format!("Asset {}", i));
 
             let meta = String::from_str(&env, &format!("meta{}", i));
+
+            let approvers = approval_vec(&env, &[&c1, &c2]);
 
             let asset_id = client.register_asset(
 
@@ -1413,6 +1650,8 @@ mod tests {
                 &payment_token,
 
                 &treasury,
+
+                &approvers,
 
             );
 
@@ -1434,7 +1673,7 @@ mod tests {
 
     fn test_asset_lifecycle() {
 
-        let (env, admin, client) = setup();
+        let (env, admin, client, c1, c2, _c3) = setup_with_curators();
 
         let payment_token = Address::generate(&env);
 
@@ -1444,7 +1683,9 @@ mod tests {
 
         let meta = String::from_str(&env, "ipfs://bond");
 
-        let id = client.register_asset(&name, &AssetType::Debt, &meta, &1000u32, &PricingModel::Fixed, &200i128, &payment_token, &treasury);
+        let approvers = approval_vec(&env, &[&c1, &c2]);
+
+        let id = client.register_asset(&name, &AssetType::Debt, &meta, &1000u32, &PricingModel::Fixed, &200i128, &payment_token, &treasury, &approvers);
 
 
         // Draft -> Active
@@ -1489,7 +1730,7 @@ mod tests {
 
     fn test_update_pricing() {
 
-        let (env, admin, client) = setup();
+        let (env, admin, client, c1, c2, _c3) = setup_with_curators();
 
         let payment_token = Address::generate(&env);
 
@@ -1499,7 +1740,9 @@ mod tests {
 
         let meta = String::from_str(&env, "ipfs://dyn");
 
-        let id = client.register_asset(&name, &AssetType::Equity, &meta, &500u32, &PricingModel::Fixed, &100i128, &payment_token, &treasury);
+        let approvers = approval_vec(&env, &[&c1, &c2]);
+
+        let id = client.register_asset(&name, &AssetType::Equity, &meta, &500u32, &PricingModel::Fixed, &100i128, &payment_token, &treasury, &approvers);
 
 
         let thresholds = Vec::new(&env);
@@ -1520,14 +1763,15 @@ mod tests {
 
     #[test]
 
-    fn test_buy_asset_shares() {
+    fn test_buy_asset_shares() {        let (env, admin, client, c1, c2, _c3) = setup_with_curators();
 
-        let (env, admin, client) = setup();
+        // Deploy a real Stellar Asset Contract so `StellarAssetClient::mint`
 
-        let payment_token = Address::generate(&env);
+        // and the contract's token `transfer` calls succeed.
+
+        let payment_token = env.register_stellar_asset_contract(admin.clone());
 
         let treasury = Address::generate(&env);
-
 
         // Register asset
 
@@ -1535,7 +1779,9 @@ mod tests {
 
         let meta = String::from_str(&env, "ipfs://test");
 
-        let id = client.register_asset(&name, &AssetType::RealEstate, &meta, &1000u32, &PricingModel::Fixed, &50i128, &payment_token, &treasury);
+        let approvers = approval_vec(&env, &[&c1, &c2]);
+
+        let id = client.register_asset(&name, &AssetType::RealEstate, &meta, &1000u32, &PricingModel::Fixed, &50i128, &payment_token, &treasury, &approvers);
 
 
         // Activate
@@ -1581,11 +1827,17 @@ mod tests {
 
     fn test_burn_and_reconstitute() {
 
-        let (env, _admin, client) = setup();
+        let (env, _admin, client, c1, c2, _c3) = setup_with_curators();
 
-        let payment_token = Address::generate(&env);
+        // Deploy a real Stellar Asset Contract so `StellarAssetClient::mint`
+
+        // and the contract's token `transfer` calls succeed.
+
+        let payment_token = env.register_stellar_asset_contract(_admin.clone());
 
         let treasury = Address::generate(&env);
+
+        let approvers = approval_vec(&env, &[&c1, &c2]);
 
         let id = client.register_asset(
             &String::from_str(&env, "Reconstitutable Asset"),
@@ -1596,6 +1848,7 @@ mod tests {
             &50i128,
             &payment_token,
             &treasury,
+            &approvers,
         );
 
         client.activate_asset(&id);
@@ -1626,11 +1879,17 @@ mod tests {
 
     fn test_burn_and_reconstitute_requires_full_supply() {
 
-        let (env, _admin, client) = setup();
+        let (env, _admin, client, c1, c2, _c3) = setup_with_curators();
 
-        let payment_token = Address::generate(&env);
+        // Deploy a real Stellar Asset Contract so `StellarAssetClient::mint`
+
+        // and the contract's token `transfer` calls succeed.
+
+        let payment_token = env.register_stellar_asset_contract(_admin.clone());
 
         let treasury = Address::generate(&env);
+
+        let approvers = approval_vec(&env, &[&c1, &c2]);
 
         let id = client.register_asset(
             &String::from_str(&env, "Partially Owned Asset"),
@@ -1641,6 +1900,7 @@ mod tests {
             &50i128,
             &payment_token,
             &treasury,
+            &approvers,
         );
 
         client.activate_asset(&id);
@@ -1659,9 +1919,13 @@ mod tests {
 
     fn test_transfer_asset_shares() {
 
-        let (env, admin, client) = setup();
+        let (env, admin, client, c1, c2, _c3) = setup_with_curators();
 
-        let payment_token = Address::generate(&env);
+        // Deploy a real Stellar Asset Contract so `StellarAssetClient::mint`
+
+        // and the contract's token `transfer` calls succeed.
+
+        let payment_token = env.register_stellar_asset_contract(admin.clone());
 
         let treasury = Address::generate(&env);
 
@@ -1669,7 +1933,9 @@ mod tests {
 
         let meta = String::from_str(&env, "ipfs://transfer");
 
-        let id = client.register_asset(&name, &AssetType::RealEstate, &meta, &1000u32, &PricingModel::Fixed, &50i128, &payment_token, &treasury);
+        let approvers = approval_vec(&env, &[&c1, &c2]);
+
+        let id = client.register_asset(&name, &AssetType::RealEstate, &meta, &1000u32, &PricingModel::Fixed, &50i128, &payment_token, &treasury, &approvers);
 
         client.activate_asset(&id);
 
@@ -1698,7 +1964,7 @@ mod tests {
 
     fn test_asset_restrictions() {
 
-        let (env, admin, client) = setup();
+        let (env, admin, client, c1, c2, _c3) = setup_with_curators();
 
         let payment_token = Address::generate(&env);
 
@@ -1708,7 +1974,9 @@ mod tests {
 
         let meta = String::from_str(&env, "ipfs://kyc");
 
-        let id = client.register_asset(&name, &AssetType::Equity, &meta, &1000u32, &PricingModel::Fixed, &100i128, &payment_token, &treasury);
+        let approvers = approval_vec(&env, &[&c1, &c2]);
+
+        let id = client.register_asset(&name, &AssetType::Equity, &meta, &1000u32, &PricingModel::Fixed, &100i128, &payment_token, &treasury, &approvers);
 
 
         let restricted = AssetRestrictions {
@@ -1748,7 +2016,7 @@ mod tests {
 
     fn test_templates() {
 
-        let (env, admin, client) = setup();
+        let (env, admin, client, c1, c2, _c3) = setup_with_curators();
 
         let name = String::from_str(&env, "RealEstateTemplate");
 
@@ -1789,7 +2057,7 @@ mod tests {
 
     fn test_list_by_status() {
 
-        let (env, admin, client) = setup();
+        let (env, admin, client, c1, c2, _c3) = setup_with_curators();
 
         let payment_token = Address::generate(&env);
 
@@ -1804,7 +2072,9 @@ mod tests {
 
             let meta = String::from_str(&env, &format!("meta{}", i));
 
-            let id = client.register_asset(&name, &AssetType::Other, &meta, &100u32, &PricingModel::Fixed, &10i128, &payment_token, &treasury);
+            let approvers = approval_vec(&env, &[&c1, &c2]);
+
+            let id = client.register_asset(&name, &AssetType::Other, &meta, &100u32, &PricingModel::Fixed, &10i128, &payment_token, &treasury, &approvers);
 
             if i % 2 == 0 {
 
@@ -1823,6 +2093,290 @@ mod tests {
         let draft = client.list_assets_by_status(&AssetStatus::Draft, &0, &10);
 
         assert_eq!(draft.len(), 2);
+
+    }
+
+
+    // -- Multi-Sig Approval Tests (Issue #595) --------------------
+
+    #[test]
+
+    fn test_register_asset_two_of_three_success() {
+
+        let (env, _admin, client, c1, c2, _c3) = setup_with_curators();
+
+        let payment_token = Address::generate(&env);
+
+        let treasury = Address::generate(&env);
+
+        let approvers = approval_vec(&env, &[&c1, &c2]);
+
+        let id = client.register_asset(
+
+            &String::from_str(&env, "Two-Sig Asset"),
+
+            &AssetType::RealEstate,
+
+            &String::from_str(&env, "ipfs://two-sig"),
+
+            &100u32,
+
+            &PricingModel::Fixed,
+
+            &50i128,
+
+            &payment_token,
+
+            &treasury,
+
+            &approvers,
+
+        );
+
+        assert_eq!(id, 1);
+
+        let info = client.get_asset(&1).unwrap();
+
+        assert_eq!(info.total_supply, 100);
+
+        assert_eq!(info.status, AssetStatus::Draft);
+
+    }
+
+
+    #[test]
+
+    fn test_register_asset_three_of_three_success() {
+
+        let (env, _admin, client, c1, c2, c3) = setup_with_curators();
+
+        let payment_token = Address::generate(&env);
+
+        let treasury = Address::generate(&env);
+
+        let approvers = approval_vec(&env, &[&c1, &c2, &c3]);
+
+        let id = client.register_asset(
+
+            &String::from_str(&env, "Three-Sig Asset"),
+
+            &AssetType::Commodities,
+
+            &String::from_str(&env, "ipfs://three-sig"),
+
+            &500u32,
+
+            &PricingModel::Fixed,
+
+            &25i128,
+
+            &payment_token,
+
+            &treasury,
+
+            &approvers,
+
+        );
+
+        assert_eq!(id, 1);
+
+    }
+
+
+    #[test]
+
+    #[should_panic(expected = "Error(Contract, #17)")]
+
+    fn test_register_asset_rejects_single_signature() {
+
+        let (env, _admin, client, c1, _c2, _c3) = setup_with_curators();
+
+        let payment_token = Address::generate(&env);
+
+        let treasury = Address::generate(&env);
+
+        // Only one curator approves -> minting must be rejected.
+
+        let approvers = approval_vec(&env, &[&c1]);
+
+        client.register_asset(
+
+            &String::from_str(&env, "Single-Sig Asset"),
+
+            &AssetType::Art,
+
+            &String::from_str(&env, "ipfs://single-sig"),
+
+            &100u32,
+
+            &PricingModel::Fixed,
+
+            &10i128,
+
+            &payment_token,
+
+            &treasury,
+
+            &approvers,
+
+        );
+
+    }
+
+
+    #[test]
+
+    #[should_panic(expected = "Error(Contract, #17)")]
+
+    fn test_register_asset_rejects_duplicate_single_signer() {
+
+        let (env, _admin, client, c1, _c2, _c3) = setup_with_curators();
+
+        let payment_token = Address::generate(&env);
+
+        let treasury = Address::generate(&env);
+
+        // The same curator listed twice must not count as two approvals.
+
+        let approvers = approval_vec(&env, &[&c1, &c1]);
+
+        client.register_asset(
+
+            &String::from_str(&env, "Dup-Sig Asset"),
+
+            &AssetType::Debt,
+
+            &String::from_str(&env, "ipfs://dup-sig"),
+
+            &100u32,
+
+            &PricingModel::Fixed,
+
+            &10i128,
+
+            &payment_token,
+
+            &treasury,
+
+            &approvers,
+
+        );
+
+    }
+
+
+    #[test]
+
+    #[should_panic(expected = "Error(Contract, #18)")]
+
+    fn test_register_asset_rejects_non_curator_signer() {
+
+        let (env, _admin, client, c1, _c2, _c3) = setup_with_curators();
+
+        let payment_token = Address::generate(&env);
+
+        let treasury = Address::generate(&env);
+
+        let outsider = Address::generate(&env);
+
+        // A curator plus an address outside the designated set must fail.
+
+        let approvers = approval_vec(&env, &[&c1, &outsider]);
+
+        client.register_asset(
+
+            &String::from_str(&env, "Outsider Asset"),
+
+            &AssetType::Equity,
+
+            &String::from_str(&env, "ipfs://outsider"),
+
+            &100u32,
+
+            &PricingModel::Fixed,
+
+            &10i128,
+
+            &payment_token,
+
+            &treasury,
+
+            &approvers,
+
+        );
+
+    }
+
+
+    #[test]
+
+    #[should_panic(expected = "Error(Contract, #16)")]
+
+    fn test_set_curators_requires_exactly_three() {
+
+        let (env, _admin, client, c1, c2, _c3) = setup_with_curators();
+
+        // Attempting to reconfigure with only two curators is invalid.
+
+        let curators = approval_vec(&env, &[&c1, &c2]);
+
+        client.set_curators(&curators);
+
+    }
+
+
+    #[test]
+
+    #[should_panic(expected = "Error(Contract, #16)")]
+
+    fn test_set_curators_rejects_duplicates() {
+
+        let (env, _admin, client, c1, _c2, _c3) = setup_with_curators();
+
+        let c4 = Address::generate(&env);
+
+        let curators = approval_vec(&env, &[&c1, &c1, &c4]);
+
+        client.set_curators(&curators);
+
+    }
+
+
+    #[test]
+
+    #[should_panic(expected = "Curators not configured")]
+
+    fn test_register_asset_requires_curator_setup() {
+
+        let (env, _admin, client) = setup();
+
+        let payment_token = Address::generate(&env);
+
+        let treasury = Address::generate(&env);
+
+        let approvers = approval_vec(&env, &[&treasury]);
+
+        client.register_asset(
+
+            &String::from_str(&env, "No Curators"),
+
+            &AssetType::Other,
+
+            &String::from_str(&env, "ipfs://no-curators"),
+
+            &100u32,
+
+            &PricingModel::Fixed,
+
+            &10i128,
+
+            &payment_token,
+
+            &treasury,
+
+            &approvers,
+
+        );
 
     }
 

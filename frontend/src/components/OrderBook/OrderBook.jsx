@@ -16,6 +16,7 @@ import { useQuery } from '@apollo/client';
 import { GET_ORDER_BOOK } from '../../graphql/queries';
 import Card from '../Card/Card';
 import VirtualList from '../VirtualList/VirtualList';
+import OrderBookSkeleton from '../Skeleton/OrderBookSkeleton';
 import styles from './OrderBook.module.css';
 
 const ORDER_ROW_HEIGHT = 56;
@@ -31,7 +32,8 @@ export default function OrderBook({ assetId }) {
     return (
       <Card className={styles.orderBook}>
         <div className={styles.header}>Order Book</div>
-        <div className={styles.loading}>Loading orders...</div>
+        {/* Issue #572: skeleton rows prevent layout shift once data loads */}
+        <OrderBookSkeleton rows={6} />
       </Card>
     );
   }

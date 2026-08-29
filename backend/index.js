@@ -35,9 +35,9 @@ import {
   problemDetailsNotFoundHandler,
   problemDetailsErrorHandler,
 } from './src/middleware/problemDetails.js';
-import swaggerUi from 'swagger-ui-express';
 import { generateOpenapiSpec } from './src/services/openapiService.js';
 import { getDatabase } from './src/services/database.js';
+import { wsManager } from './websocket.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // multer memoryStorage keeps the file in memory as a Buffer (req.file.buffer).
@@ -513,42 +513,7 @@ app.get('/api-docs.yaml', (_req, res) => {
   res.type('text/yaml').send(openapiSpec ? 'To generate YAML, use the JSON endpoint or request with Accept: text/yaml' : '');
 });
 
-// Configure default admin API key with enterprise tier
-const adminApiKey = process.env.ADMIN_API_KEY || 'dev-key-change-in-production';
-rateLimiterService.configureApiKey(adminApiKey, 'enterprise', {
-  email: process.env.ADMIN_EMAIL,
-});
 
-const rateLimiter = createRateLimiter(rateLimiterService, {
-  onBlocked: (req, res, result) => {
-    const body = { error: 'Rate limit exceeded' };
-    if (result.reason) body.reason = result.reason;
-    if (result.upgradePrompt) body.upgrade = result.upgradePrompt;
-    req.log?.warn({ reason: result.reason, apiKey: req.headers['x-api-key']?.slice(0, 8) }, 'Request rate limited');
-    return res.status(result.status || 429).json(body);
-  },
-});
-
-// Apply rate limiter to all API routes (skip admin routes which have their own auth)
-app.use('/api/', (req, res, next) => {
-  if (req.path.startsWith('/admin/rate-limits')) return next();
-  rateLimiter(req, res, next);
-});
-
-// Write limiter for admin write operations (POST/DELETE)
-const writeLimiter = async (req, res, next) => {
-  const apiKey = req.headers['x-api-key'] || req.query.api_key;
-  if (!apiKey) return next();
-  const result = await rateLimiterService.checkRateLimit(apiKey, {
-    ip: req.ip,
-    path: req.path,
-    method: req.method,
-  });
-  if (!result.allowed) {
-    return res.status(429).json({ error: 'Too many write requests', reason: result.reason });
-  }
-  next();
-};
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
@@ -730,11 +695,6 @@ v1.get('/rwa/export', adminAuth, (req, res) => {
   res.json(assets);
 });
 
-// GET /api/rwa?after=<cursor>&before=<cursor>&limit=20&sort=createdAt&order=desc&assetType=real_estate&search=coffee
-app.get('/api/rwa', (req, res, next) => {
-  try {
-    const data = loadData();
-    const assets = Object.entries(data).map(([contractId, meta]) => ({ contractId, ...meta }));
 /**
  * @openapi
  * /api/v1/rwa:
@@ -822,9 +782,6 @@ v1.get('/rwa', (req, res) => {
 
     // Cache the asset list result (fire-and-forget)
     cacheSet('rwa:all', result).catch(() => {});
-  } catch (error) {
-    next(error);
-  }
 });
 
 /**
@@ -1825,7 +1782,7 @@ async function initializeApolloServer(expressApp, httpServer) {
 
 if (process.env.NODE_ENV !== 'test') {
   import('./cache.js').then(({ initClient }) => initClient());
-  app.listen(PORT, () => {
+  const httpServer = app.listen(PORT, () => {
     logger.info({
       port: PORT,
       rateLimiterTiers: Object.keys(rateLimiterService.getAvailableTiers()).length,
@@ -1847,4 +1804,11 @@ if (process.env.NODE_ENV !== 'test') {
       }
     }, 60 * 60 * 1000); // 1 hour
   });
+
+  // ── WebSocket server (Issue #593) ──────────────────────────────────────
+  // Attach the /ws endpoint and enable cross-instance broadcasting through
+  // the Redis Pub/Sub adapter whenever REDIS_URL is configured, so order
+  // book / price updates reach clients on every horizontal node.
+  wsManager.initialize(httpServer);
+  wsManager.connectRedisAdapter();
 }
