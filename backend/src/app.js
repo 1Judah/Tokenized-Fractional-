@@ -58,6 +58,7 @@ import {
   isWhitelistEnabled,
 } from './middleware/ipAccessControl.js';
 import { createSecurityHeadersMiddleware } from './middleware/securityHeaders.js';
+import { requireSanitization } from './middleware/sanitizationMiddleware.js';
 import { v1 } from './routes/rwa.js';
 import { swaggerSpec } from '../docs.js';
 import { initDatabase, getDatabase } from './services/database.js';
@@ -230,6 +231,12 @@ app.use(
   }),
 );
 app.use(express.json({ limit: '10kb' }));
+
+// Strict user-input sanitization (DOMPurify + encoding) applied to every
+// incoming request body, query, and params BEFORE it reaches a handler and
+// can be persisted to the database.
+app.use(requireSanitization);
+
 app.use(partialResponseMiddleware());
 
 // Request-ID middleware
