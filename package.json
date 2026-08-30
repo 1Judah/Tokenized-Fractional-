@@ -31,5 +31,8 @@
     "**/*.json": [
       "node -e \"JSON.parse(require('fs').readFileSync(process.argv[1]))\" --"
     ]
+  },
+  "dependencies": {
+    "recharts": "^3.10.1"
   }
 }
