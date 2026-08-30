@@ -19,6 +19,7 @@ import { setTimeout } from 'timers/promises';
 import swaggerUi from 'swagger-ui-express';
 import { swaggerSpec } from './docs.js';
 import yoga from './graphql/index.js';
+import { createETagMiddleware, invalidateLedger } from './graphql/etag.js';
 import { cacheGet, cacheSet, cacheDel } from './cache.js';
 import { RateLimiterService } from './src/services/rateLimiterService.js';
 import { AnomalyDetector } from './src/services/anomalyDetector.js';
@@ -34,9 +35,9 @@ import {
   problemDetailsNotFoundHandler,
   problemDetailsErrorHandler,
 } from './src/middleware/problemDetails.js';
-import swaggerUi from 'swagger-ui-express';
 import { generateOpenapiSpec } from './src/services/openapiService.js';
 import { getDatabase } from './src/services/database.js';
+import { wsManager } from './websocket.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // multer memoryStorage keeps the file in memory as a Buffer (req.file.buffer).
@@ -100,6 +101,8 @@ function loadData() {
 
 function saveData(data) {
   writeFileSync(getDataFile(), JSON.stringify(data, null, 2), 'utf-8');
+  // Bump the ledger revision so GraphQL ETags are invalidated on any data change.
+  invalidateLedger();
 }
 
 export function validateContractId(id) {
@@ -234,6 +237,42 @@ const ASSET_STATUS = {
 
 function isApproved(asset) {
   return !asset.status || asset.status === ASSET_STATUS.APPROVED;
+}
+
+function escapeXml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function getPublicSiteUrl(req) {
+  return (process.env.PUBLIC_SITE_URL || process.env.SITE_URL || `${req.protocol}://${req.get('host')}`)
+    .replace(/\/$/, '');
+}
+
+function buildSitemap(req) {
+  const data = loadData();
+  const updatedAt = new Date().toISOString();
+  const urls = [
+    `    <url><loc>${escapeXml(`${getPublicSiteUrl(req)}/`)}</loc><lastmod>${updatedAt}</lastmod><changefreq>daily</changefreq><priority>1.0</priority></url>`,
+    ...Object.entries(data)
+      .filter(([, meta]) => isApproved(meta))
+      .map(([contractId, meta]) => {
+        const lastmod = new Date(meta.updatedAt || meta.createdAt || updatedAt).toISOString();
+        const loc = `${getPublicSiteUrl(req)}/asset/${encodeURIComponent(contractId)}`;
+        return `    <url><loc>${escapeXml(loc)}</loc><lastmod>${lastmod}</lastmod><changefreq>daily</changefreq><priority>0.8</priority></url>`;
+      }),
+  ];
+
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+    ...urls,
+    '</urlset>',
+  ].join('\n');
 }
 
 // ── Webhook helpers ────────────────────────────────────────────────────────────
@@ -474,44 +513,18 @@ app.get('/api-docs.yaml', (_req, res) => {
   res.type('text/yaml').send(openapiSpec ? 'To generate YAML, use the JSON endpoint or request with Accept: text/yaml' : '');
 });
 
-// Configure default admin API key with enterprise tier
-const adminApiKey = process.env.ADMIN_API_KEY || 'dev-key-change-in-production';
-rateLimiterService.configureApiKey(adminApiKey, 'enterprise', {
-  email: process.env.ADMIN_EMAIL,
-});
 
-const rateLimiter = createRateLimiter(rateLimiterService, {
-  onBlocked: (req, res, result) => {
-    const body = { error: 'Rate limit exceeded' };
-    if (result.reason) body.reason = result.reason;
-    if (result.upgradePrompt) body.upgrade = result.upgradePrompt;
-    req.log?.warn({ reason: result.reason, apiKey: req.headers['x-api-key']?.slice(0, 8) }, 'Request rate limited');
-    return res.status(result.status || 429).json(body);
-  },
-});
-
-// Apply rate limiter to all API routes (skip admin routes which have their own auth)
-app.use('/api/', (req, res, next) => {
-  if (req.path.startsWith('/admin/rate-limits')) return next();
-  rateLimiter(req, res, next);
-});
-
-// Write limiter for admin write operations (POST/DELETE)
-const writeLimiter = async (req, res, next) => {
-  const apiKey = req.headers['x-api-key'] || req.query.api_key;
-  if (!apiKey) return next();
-  const result = await rateLimiterService.checkRateLimit(apiKey, {
-    ip: req.ip,
-    path: req.path,
-    method: req.method,
-  });
-  if (!result.allowed) {
-    return res.status(429).json({ error: 'Too many write requests', reason: result.reason });
-  }
-  next();
-};
 
 // ── Routes ────────────────────────────────────────────────────────────────────
+
+// Public sitemap is generated from the current approved asset metadata.
+app.get('/sitemap.xml', (req, res) => {
+  res.set({
+    'Cache-Control': 'public, max-age=86400, s-maxage=86400',
+    'Content-Type': 'application/xml; charset=utf-8',
+  });
+  res.send(buildSitemap(req));
+});
 
 /**
  * @openapi
@@ -682,11 +695,6 @@ v1.get('/rwa/export', adminAuth, (req, res) => {
   res.json(assets);
 });
 
-// GET /api/rwa?after=<cursor>&before=<cursor>&limit=20&sort=createdAt&order=desc&assetType=real_estate&search=coffee
-app.get('/api/rwa', (req, res, next) => {
-  try {
-    const data = loadData();
-    const assets = Object.entries(data).map(([contractId, meta]) => ({ contractId, ...meta }));
 /**
  * @openapi
  * /api/v1/rwa:
@@ -774,9 +782,6 @@ v1.get('/rwa', (req, res) => {
 
     // Cache the asset list result (fire-and-forget)
     cacheSet('rwa:all', result).catch(() => {});
-  } catch (error) {
-    next(error);
-  }
 });
 
 /**
@@ -1681,6 +1686,13 @@ v1.get('/ws/stats', (req, res) => {
   res.json(wsManager.getStats());
 });
 
+// ── GraphQL endpoint (Issue #413: deterministic ETag caching) ────────────────
+// Mount the GraphQL Yoga server at /api/graphql. A deterministic ETag
+// middleware runs first so unchanged vault queries short-circuit to
+// `304 Not Modified`, bypassing the resolvers and data-layer reads.
+app.use('/api/graphql', createETagMiddleware({ logger }));
+app.use('/api/graphql', yoga);
+
 // Mount versioned router and backward-compatible aliases
 app.use('/api/v1', v1);
 app.use('/api', v1); // legacy /api/rwa aliased to /api/v1/rwa
@@ -1770,7 +1782,7 @@ async function initializeApolloServer(expressApp, httpServer) {
 
 if (process.env.NODE_ENV !== 'test') {
   import('./cache.js').then(({ initClient }) => initClient());
-  app.listen(PORT, () => {
+  const httpServer = app.listen(PORT, () => {
     logger.info({
       port: PORT,
       rateLimiterTiers: Object.keys(rateLimiterService.getAvailableTiers()).length,
@@ -1792,4 +1804,11 @@ if (process.env.NODE_ENV !== 'test') {
       }
     }, 60 * 60 * 1000); // 1 hour
   });
+
+  // ── WebSocket server (Issue #593) ──────────────────────────────────────
+  // Attach the /ws endpoint and enable cross-instance broadcasting through
+  // the Redis Pub/Sub adapter whenever REDIS_URL is configured, so order
+  // book / price updates reach clients on every horizontal node.
+  wsManager.initialize(httpServer);
+  wsManager.connectRedisAdapter();
 }

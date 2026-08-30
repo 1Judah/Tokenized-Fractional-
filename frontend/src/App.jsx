@@ -21,6 +21,7 @@ import styles from './App.module.css';
 import Breadcrumbs from './components/Breadcrumbs/Breadcrumbs';
 import PriceRangeFilter from './components/PriceRangeFilter/PriceRangeFilter';
 import ConnectionStatusIndicator from './components/ConnectionStatusIndicator/ConnectionStatusIndicator';
+import { useTheme } from './context/ThemeContext';
 
 import { useWalletStore } from './store/useWalletStore';
 import useLiveUpdatesStore from './store/useLiveUpdatesStore';
@@ -46,6 +47,7 @@ import { useOfflineSync } from './hooks/useOfflineSync';
 import { useWalletDiscovery } from './hooks/useWalletDiscovery';
 import OfflineIndicator from './components/OfflineIndicator/OfflineIndicator';
 import WalletSelector from './components/WalletSelector/WalletSelector';
+import OnboardingTour from './components/OnboardingTour';
 import { setQueryData, applySubscriptionDelta } from './services/queryCache';
 
 // ── Route-based code splitting (Issue #304) ──────────────────────────────────
@@ -204,7 +206,7 @@ const MarketplacePage = React.memo(
           </Card>
         ) : null}
 
-        <section className={styles.section}>
+        <section className={`${styles.section} tour-asset-selection`}>
           <h2 className={styles.sectionTitle}>Available Assets</h2>
           <AssetGrid
             assets={assets}
@@ -264,6 +266,7 @@ function App() {
     isConnecting,
     walletError,
     shares,
+    activeProvider,
     connect,
     disconnect,
     checkConnection,
@@ -293,8 +296,10 @@ function App() {
   const txStatus = useTransactionStatus(lastTxHash);
   const pendingToastRef = useRef(null);
   const notifiedRef = useRef({});
+  const navigate = useNavigate();
+  const location = useLocation();
 
-  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
+  const { theme, toggleTheme } = useTheme();
   const [view, setView] = useState('marketplace');
 
   // ── WebSocket for real-time updates (Issues #425, #426) ─────────────────────
@@ -418,13 +423,6 @@ function App() {
       setConfirmPending(false);
     },
   });
-
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('theme', theme);
-  }, [theme]);
-
-  const toggleTheme = () => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
 
   // Track purchase details for WebSocket broadcast
   const lastPurchaseRef = useRef({ amount: null, timestamp: null });
@@ -563,7 +561,50 @@ function App() {
     clearAssets();
     setTxResult(null);
     setTxError(null);
-  }, [disconnect, clearMeta, clearAssets]);
+    ['auth_token', 'jwt', 'access_token', 'refresh_token'].forEach((key) => {
+      localStorage.removeItem(key);
+      sessionStorage.removeItem(key);
+    });
+    if (location.pathname !== '/') navigate('/', { replace: true });
+  }, [disconnect, clearMeta, clearAssets, location.pathname, navigate]);
+
+  useEffect(() => {
+    if (!publicKey) return undefined;
+
+    let disconnected = false;
+    const handleDisconnect = () => {
+      if (disconnected) return;
+      disconnected = true;
+      disconnectWallet();
+    };
+    const handleAccountsChanged = (accounts) => {
+      if (!accounts || accounts.length === 0) handleDisconnect();
+    };
+    const provider = activeProvider?.provider;
+    const providerEvents = [
+      ['accountsChanged', handleAccountsChanged],
+      ['accountChanged', handleAccountsChanged],
+      ['disconnect', handleDisconnect],
+    ];
+
+    providerEvents.forEach(([event, handler]) => provider?.on?.(event, handler));
+    ['wallet:disconnect', 'freighter:disconnect', 'albedo:disconnect'].forEach((event) => {
+      window.addEventListener(event, handleDisconnect);
+    });
+
+    const checkWallet = async () => {
+      if (!disconnected && !(await checkConnection())) handleDisconnect();
+    };
+    const intervalId = window.setInterval(checkWallet, 2000);
+
+    return () => {
+      providerEvents.forEach(([event, handler]) => provider?.removeListener?.(event, handler));
+      ['wallet:disconnect', 'freighter:disconnect', 'albedo:disconnect'].forEach((event) => {
+        window.removeEventListener(event, handleDisconnect);
+      });
+      window.clearInterval(intervalId);
+    };
+  }, [publicKey, activeProvider, checkConnection, disconnectWallet]);
 
   const handleBuyShares = useCallback(() => {
     if (!publicKey) return;
@@ -603,6 +644,7 @@ function App() {
 
   return (
     <div className={styles.container}>
+      <OnboardingTour />
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <header className={styles.header}>
         <div className={styles.titleArea}>
@@ -637,7 +679,7 @@ function App() {
           </div>
         </div>
 
-        <div className={styles.walletArea}>
+        <div className={`${styles.walletArea} tour-wallet-connect`}>
           <ConnectionStatusIndicator
             status={wsConnected ? 'connected' : 'disconnected'}
             showLabel={false}
@@ -702,7 +744,7 @@ function App() {
           {t('nav.marketplace')}
         </button>
         <button
-          className={`${styles.tab} ${view === 'portfolio' ? styles.tabActive : ''}`}
+          className={`${styles.tab} ${view === 'portfolio' ? styles.tabActive : ''} tour-portfolio`}
           onClick={() => setView('portfolio')}
         >
           {t('nav.portfolio')}
@@ -859,7 +901,7 @@ function App() {
             ) : null}
 
             {/* ── Asset Listing Grid ─────────────────────────────────────────── */}
-            <section className={styles.section}>
+            <section className={`${styles.section} tour-asset-selection`}>
               <h2 className={styles.sectionTitle}>{t('marketplace.availableAssets')}</h2>
 
               {/* Issue #373 — Price range filter sidebar */}
@@ -915,6 +957,7 @@ function App() {
               <NewsSection />
             </Suspense>
 
+            <div className="tour-order-book">
             {/* ── Holdings + Buy Card ─────────────────────────────────────────── */}
             {publicKey && (
               <BuyShares
@@ -932,6 +975,8 @@ function App() {
                 onBuyAmountChange={setBuyAmount}
               />
             )}
+
+            </div>
 
             {/* ── Price Alerts (Issue #188) ─────────────────────────────────────── */}
             {CONTRACT_ID.length >= 50 && pricePerShare != null && (

@@ -11,6 +11,7 @@
  */
 
 import pino from 'pino';
+import os from 'os';
 import { LOG_LEVEL, NODE_ENV } from '../config.js';
 
 const isDev = NODE_ENV === 'development';
@@ -89,7 +90,7 @@ export const logger = pino({
   }),
   base: {
     pid: process.pid,
-    hostname: require('os').hostname(),
+    hostname: os.hostname(),
     environment: NODE_ENV,
   },
 });
