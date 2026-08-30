@@ -47,6 +47,7 @@ import { useOfflineSync } from './hooks/useOfflineSync';
 import { useWalletDiscovery } from './hooks/useWalletDiscovery';
 import OfflineIndicator from './components/OfflineIndicator/OfflineIndicator';
 import WalletSelector from './components/WalletSelector/WalletSelector';
+import OnboardingTour from './components/OnboardingTour';
 import { setQueryData, applySubscriptionDelta } from './services/queryCache';
 
 // ── Route-based code splitting (Issue #304) ──────────────────────────────────
@@ -205,7 +206,7 @@ const MarketplacePage = React.memo(
           </Card>
         ) : null}
 
-        <section className={styles.section}>
+        <section className={`${styles.section} tour-asset-selection`}>
           <h2 className={styles.sectionTitle}>Available Assets</h2>
           <AssetGrid
             assets={assets}
@@ -643,6 +644,7 @@ function App() {
 
   return (
     <div className={styles.container}>
+      <OnboardingTour />
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <header className={styles.header}>
         <div className={styles.titleArea}>
@@ -677,7 +679,7 @@ function App() {
           </div>
         </div>
 
-        <div className={styles.walletArea}>
+        <div className={`${styles.walletArea} tour-wallet-connect`}>
           <ConnectionStatusIndicator
             status={wsConnected ? 'connected' : 'disconnected'}
             showLabel={false}
@@ -742,7 +744,7 @@ function App() {
           {t('nav.marketplace')}
         </button>
         <button
-          className={`${styles.tab} ${view === 'portfolio' ? styles.tabActive : ''}`}
+          className={`${styles.tab} ${view === 'portfolio' ? styles.tabActive : ''} tour-portfolio`}
           onClick={() => setView('portfolio')}
         >
           {t('nav.portfolio')}
@@ -899,7 +901,7 @@ function App() {
             ) : null}
 
             {/* ── Asset Listing Grid ─────────────────────────────────────────── */}
-            <section className={styles.section}>
+            <section className={`${styles.section} tour-asset-selection`}>
               <h2 className={styles.sectionTitle}>{t('marketplace.availableAssets')}</h2>
 
               {/* Issue #373 — Price range filter sidebar */}
@@ -955,6 +957,7 @@ function App() {
               <NewsSection />
             </Suspense>
 
+            <div className="tour-order-book">
             {/* ── Holdings + Buy Card ─────────────────────────────────────────── */}
             {publicKey && (
               <BuyShares
@@ -972,6 +975,8 @@ function App() {
                 onBuyAmountChange={setBuyAmount}
               />
             )}
+
+            </div>
 
             {/* ── Price Alerts (Issue #188) ─────────────────────────────────────── */}
             {CONTRACT_ID.length >= 50 && pricePerShare != null && (
