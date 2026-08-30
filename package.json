@@ -13,7 +13,13 @@
     "typecheck:sdk": "npm --prefix sdk run typecheck",
     "lint:backend": "cd backend && npm run lint --if-present",
     "test:backend": "cd backend && npm test",
-    "test:frontend": "cd frontend && npm run test:e2e --if-present"
+    "test:frontend": "cd frontend && npm run test:e2e --if-present",
+    "loadtest:install": "npm --prefix load-test install",
+    "loadtest:smoke": "npm --prefix load-test run test:smoke",
+    "loadtest:orders": "npm --prefix load-test run test:orders",
+    "loadtest:websocket": "npm --prefix load-test run test:websocket",
+    "loadtest:full": "npm --prefix load-test run test:full",
+    "loadtest:baseline": "node load-test/helpers/run-baseline.js"
   },
   "devDependencies": {
     "@commitlint/cli": "^19.6.0",
